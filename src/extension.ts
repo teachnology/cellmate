@@ -254,9 +254,19 @@ export function activate(ctx: vscode.ExtensionContext) {
         const apiKey = cfg.get<string>('apiKey') || '';
         const modelName = cfg.get<string>('modelName') || '';
         const templateId = cfg.get<string>('templateId', '1');
+        const useHiddenTests = cfg.get<boolean>('useHiddenTests', true);
         
+        // Debug configuration
+        console.log('=== Configuration Debug ===');
+        console.log('All jupyterAiFeedback config:', cfg);
+        console.log('useHiddenTests raw value:', cfg.get('useHiddenTests'));
+        console.log('useHiddenTests with default:', useHiddenTests);
+        console.log('Configuration source:', cfg.inspect('useHiddenTests'));
+        console.log('=== End Debug ===');
         console.log('templateId:', templateId);
-        
+        console.log('useHiddenTests:', useHiddenTests);
+        console.log('modelName:', modelName);
+
         if (!apiUrl || !apiKey || !modelName) {
           return vscode.window.showErrorMessage(
             'Please configure jupyterAiFeedback.apiUrl, apiKey, and modelName in settings'
@@ -274,93 +284,112 @@ export function activate(ctx: vscode.ExtensionContext) {
         // 2. Get prompt content
         const promptContent = await getPromptContent(templateId);
 
-        // 3. Get test content
-        const exId = extractExerciseId(code);
-        if (!exId) {
-          vscode.window.showWarningMessage('No # EXERCISE_ID found in code');
-          return;
-        }
-        const { test, metadata } = await getTestFiles(exId);
-
-        // 4. Run tests locally
-        const testResult = await runLocalTest(code, test);
-
-        // 5. Parse test results and generate analysis
+        // 3. Initialize analysis variable
         let analysis = '';
-        if (testResult.report && testResult.report.tests) {
-          const total = testResult.report.tests.length;
-          const passed = testResult.report.tests.filter((t: any) => t.outcome === 'passed').length;
-          const failed = total - passed;
-          
-          analysis += `## Test Results Overview\n`;
-          analysis += `- **Total Tests:** ${total}\n`;
-          analysis += `- **Passed:** ${passed} ✅\n`;
-          analysis += `- **Failed:** ${failed} ❌\n`;
-          analysis += `- **Success Rate:** ${Math.round((passed / total) * 100)}%\n\n`;
-          
-          if (failed > 0) {
-            analysis += `## Failed Test Details\n\n`;
-            const failedTests = testResult.report.tests.filter((t: any) => t.outcome === 'failed');
+        
+        // 4. If useHiddenTests is enabled, get test content and run tests
+        if (useHiddenTests) {
+          const exId = extractExerciseId(code);
+          if (!exId) {
+            vscode.window.showWarningMessage('No # EXERCISE_ID found in code');
+            return;
+          }
+          const { test, metadata } = await getTestFiles(exId);
+
+          // Run tests locally
+          const testResult = await runLocalTest(code, test);
+
+          // Parse test results and generate analysis
+          if (testResult.report && testResult.report.tests) {
+            const total = testResult.report.tests.length;
+            const passed = testResult.report.tests.filter((t: any) => t.outcome === 'passed').length;
+            const failed = total - passed;
             
-            failedTests.forEach((test: any, index: number) => {
-              const testName = test.nodeid.split('::').pop() || 'Unknown Test';
-              const errorMessage = extractErrorMessage(test);
-              const expectedValue = extractExpectedValue(errorMessage);
-              const actualValue = extractActualValue(errorMessage);
+            analysis += `## Test Results Overview\n`;
+            analysis += `- **Total Tests:** ${total}\n`;
+            analysis += `- **Passed:** ${passed} ✅\n`;
+            analysis += `- **Failed:** ${failed} ❌\n`;
+            analysis += `- **Success Rate:** ${Math.round((passed / total) * 100)}%\n\n`;
+            
+            if (failed > 0) {
+              analysis += `## Failed Test Details\n\n`;
+              const failedTests = testResult.report.tests.filter((t: any) => t.outcome === 'failed');
               
-              analysis += `### ${index + 1}. ${testName}\n`;
-              analysis += `**Error Message:** ${errorMessage}\n`;
-              if (expectedValue) analysis += `**Expected:** ${expectedValue}\n`;
-              if (actualValue) analysis += `**Actual:** ${actualValue}\n`;
-              analysis += `\n`;
-            });
-            
-            // Generate improvement suggestions
-            const suggestions = generateSuggestions(failedTests, metadata);
-            if (suggestions.length > 0) {
-              analysis += `## Improvement Suggestions\n`;
-              suggestions.forEach(suggestion => {
-                analysis += `- ${suggestion}\n`;
+              failedTests.forEach((test: any, index: number) => {
+                const testName = test.nodeid.split('::').pop() || 'Unknown Test';
+                const errorMessage = extractErrorMessage(test);
+                const expectedValue = extractExpectedValue(errorMessage);
+                const actualValue = extractActualValue(errorMessage);
+                
+                analysis += `### ${index + 1}. ${testName}\n`;
+                analysis += `**Error Message:** ${errorMessage}\n`;
+                if (expectedValue) analysis += `**Expected:** ${expectedValue}\n`;
+                if (actualValue) analysis += `**Actual:** ${actualValue}\n`;
+                analysis += `\n`;
               });
-              analysis += `\n`;
+              
+              // Generate improvement suggestions
+              const suggestions = generateSuggestions(failedTests, metadata);
+              if (suggestions.length > 0) {
+                analysis += `## Improvement Suggestions\n`;
+                suggestions.forEach(suggestion => {
+                  analysis += `- ${suggestion}\n`;
+                });
+                analysis += `\n`;
+              }
             }
+          } else {
+            analysis += `## Test Execution Issues\n`;
+            if (testResult.stderr) {
+              analysis += `**Error Output:** ${testResult.stderr}\n`;
+            }
+            if (testResult.stdout) {
+              analysis += `**Standard Output:** ${testResult.stdout}\n`;
+            }
+            analysis += `\nPossible causes:\n`;
+            analysis += `- Code syntax errors\n`;
+            analysis += `- Import module failures\n`;
+            analysis += `- Incomplete function definitions\n`;
+            analysis += `- Test file format issues\n`;
           }
-        } else {
-          analysis += `## Test Execution Issues\n`;
-          if (testResult.stderr) {
-            analysis += `**Error Output:** ${testResult.stderr}\n`;
-          }
-          if (testResult.stdout) {
-            analysis += `**Standard Output:** ${testResult.stdout}\n`;
-          }
-          analysis += `\nPossible causes:\n`;
-          analysis += `- Code syntax errors\n`;
-          analysis += `- Import module failures\n`;
-          analysis += `- Incomplete function definitions\n`;
-          analysis += `- Test file format issues\n`;
         }
 
-        // 6. Assemble prompt
+        // 5. Assemble prompt
         console.log("promptContent:", promptContent)
         console.log("analysis:", analysis)
-        let prompt = promptContent.replace('{{code}}', code) + `\n\n# Hidden Test Results\n\`\`\`\n${analysis}\n\`\`\``;
+        let prompt = promptContent.replace('{{code}}', code);
+        
+        // Add analysis to prompt only if useHiddenTests is enabled and analysis exists
+        if (useHiddenTests && analysis) {
+          prompt += `\n\n# Hidden Test Results\n\`\`\`\n${analysis}\n\`\`\``;
+        }
+        
         console.log("prompt:", prompt)
+        
+        // Add system role to the beginning of the prompt
         const system_role = "You are a patient and detail-oriented Python teaching assistant. "
                             "Based on the analysis below, provide step-by-step, targeted feedback:\n"
                             "- Ask leading questions that guide the student toward discovering the solution, rather than giving full code.\n"
                             "- If helpful, recommend relevant learning resources or key concepts.\n"
+                            "- Be encouraging and constructive in your feedback.\n\n";
         
+        const fullPrompt = system_role + prompt;
+        
+        // Ollama API format
         const body = {
-        model: modelName,
-        messages: [
-            { role: 'system', content: system_role },
-            { role: 'user',   content: prompt }
-        ]
+          model: modelName,
+          prompt: fullPrompt
         };
         
         // Call the LLM interface
         let feedback: string;
         try {
+          console.log('=== API Request Debug ===');
+          console.log('API URL:', apiUrl);
+          console.log('Model Name:', modelName);
+          console.log('Request Body:', JSON.stringify(body, null, 2));
+          console.log('=== End API Request Debug ===');
+          
           const resp = await axios.post(
             apiUrl,
             body,
@@ -368,13 +397,52 @@ export function activate(ctx: vscode.ExtensionContext) {
                 headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${apiKey}`
-                }
+                },
+                responseType: 'text'
             }
           );
-        feedback = resp.data.choices[0].message.content;
+          
+          console.log('=== API Response Debug ===');
+          console.log('Response Status:', resp.status);
+          console.log('Response Data:', resp.data);
+          console.log('Response Headers:', resp.headers);
+          console.log('=== End API Response Debug ===');
+          
+          // Parse streaming response
+          const lines = resp.data.split('\n').filter((line: string) => line.trim());
+          let fullResponse = '';
+          
+          for (const line of lines) {
+            try {
+              const jsonResponse = JSON.parse(line);
+              if (jsonResponse.response) {
+                fullResponse += jsonResponse.response;
+              }
+            } catch (e) {
+              console.warn('Failed to parse JSON line:', line);
+            }
+          }
+          
+          if (!fullResponse) {
+            console.error('No valid response content found');
+            return vscode.window.showErrorMessage('No valid response content received from API.');
+          }
+          
+          feedback = fullResponse;
 
         } catch (e: any) {
-          return vscode.window.showErrorMessage('AI API call failed: ' + e.message);
+          console.error('=== API Error Debug ===');
+          console.error('Error:', e);
+          console.error('Error Response:', e.response?.data);
+          console.error('Error Status:', e.response?.status);
+          console.error('Error Headers:', e.response?.headers);
+          console.error('=== End API Error Debug ===');
+          
+          let errorMessage = 'AI API call failed: ' + e.message;
+          if (e.response?.data) {
+            errorMessage += '\nResponse: ' + JSON.stringify(e.response.data, null, 2);
+          }
+          return vscode.window.showErrorMessage(errorMessage);
         }
 
         // Insert an empty Markdown cell

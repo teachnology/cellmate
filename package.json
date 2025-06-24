@@ -45,6 +45,11 @@
           "type": "string",
           "default": "Standard Python Feedback",
           "description": "Template ID to use for AI feedback (fetched from GitHub repository)"
+        },
+        "jupyterAiFeedback.useHiddenTests": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to use hidden tests to enhance the prompt with test analysis"
         }
       }
     },
