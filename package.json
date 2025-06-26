@@ -65,6 +65,10 @@
       {
         "command": "jupyterAiFeedback.listExercises",
         "title": "List Available Exercises"
+      },
+      {
+        "command": "jupyterAiFeedback.selectTemplate",
+        "title": "choose Prompt template"
       }
     ],
     "notebookCellStatusBarItemProviders": [

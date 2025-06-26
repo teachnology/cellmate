@@ -307,8 +307,8 @@ export function activate(ctx: vscode.ExtensionContext) {
             
             analysis += `## Test Results Overview\n`;
             analysis += `- **Total Tests:** ${total}\n`;
-            analysis += `- **Passed:** ${passed} ✅\n`;
-            analysis += `- **Failed:** ${failed} ❌\n`;
+            analysis += `- **Passed:** ${passed} \n`;
+            analysis += `- **Failed:** ${failed} \n`;
             analysis += `- **Success Rate:** ${Math.round((passed / total) * 100)}%\n\n`;
             
             if (failed > 0) {
@@ -364,17 +364,14 @@ export function activate(ctx: vscode.ExtensionContext) {
           prompt += `\n\n# Hidden Test Results\n\`\`\`\n${analysis}\n\`\`\``;
         }
         
-        console.log("prompt:", prompt)
+        // console.log("prompt:", prompt)
         
         // Add system role to the beginning of the prompt
-        const system_role = "You are a patient and detail-oriented Python teaching assistant. "
-                            "Based on the analysis below, provide step-by-step, targeted feedback:\n"
-                            "- Ask leading questions that guide the student toward discovering the solution, rather than giving full code.\n"
-                            "- If helpful, recommend relevant learning resources or key concepts.\n"
-                            "- Be encouraging and constructive in your feedback.\n\n";
+        const system_role = "You are a Python teaching assistant for programming beginners. Given the uploaded code and optional hidden test results, offer concise code suggestions on improvement and fixing output errors without directly giving solutions. Be encouraging and constructive in your feedback. ";
         
         const fullPrompt = system_role + prompt;
-        
+        console.log("fullPrompt:", fullPrompt)
+
         // Ollama API format
         const body = {
           model: modelName,
@@ -427,8 +424,8 @@ export function activate(ctx: vscode.ExtensionContext) {
             console.error('No valid response content found');
             return vscode.window.showErrorMessage('No valid response content received from API.');
           }
-          
           feedback = fullResponse;
+          console.log('feedback:', feedback)
 
         } catch (e: any) {
           console.error('=== API Error Debug ===');
@@ -447,11 +444,15 @@ export function activate(ctx: vscode.ExtensionContext) {
 
         // Insert an empty Markdown cell
         await vscode.commands.executeCommand('notebook.cell.insertMarkdownCellBelow');
+        console.log('insert markdown cell');
 
         // Find the newly inserted cell
         const newCell = editor.notebook.cellAt(cell.index + 1);
+        if (!newCell) {
+          vscode.window.showErrorMessage(' cannot Markdown cell');
+          return;
+        }
         const doc = newCell.document;
-
         // Replace the cell content with WorkspaceEdit
         const lastLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
         const fullRange = new vscode.Range(
@@ -508,6 +509,34 @@ export function activate(ctx: vscode.ExtensionContext) {
         exercises.forEach(e => {
           output.appendLine(`ID: ${e.id}\nTitle: ${e.title || ''}\nDesc: ${e.description || ''}\n`);
         });
+      }
+    )
+  );
+
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand(
+      'jupyterAiFeedback.selectTemplate',
+      async () => {
+        await syncGitRepo();
+        const templates = await listLocalTemplates();
+        if (templates.length === 0) {
+          vscode.window.showInformationMessage('no available templates');
+          return;
+        }
+        // 生成下拉选项
+        const items = templates.map(t => ({
+          label: t.id,
+          description: t.filename
+        }));
+        const pick = await vscode.window.showQuickPick(items, {
+          placeHolder: 'please select a template'
+        });
+        if (pick) {
+          // 写入配置
+          await vscode.workspace.getConfiguration('jupyterAiFeedback')
+            .update('templateId', pick.label, vscode.ConfigurationTarget.Global);
+          vscode.window.showInformationMessage(`choose template: ${pick.label}`);
+        }
       }
     )
   );
