@@ -652,8 +652,8 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
   const includeProblemDescription = config.get<boolean>('includeProblemDescription', true);
   const includeCodeOutput = config.get<boolean>('includeCodeOutput', true);
   const autoExecuteCode = config.get<boolean>('autoExecuteCode', true);
-  const useHiddenTests = config.get<boolean>('useHiddenTests', false); // 🔥 集成隐藏测试功能
-  const apiFormat = config.get<string>('apiFormat', 'openai'); // 🔥 新增API格式选择
+  const useHiddenTests = config.get<boolean>('useHiddenTests', false); 
+  const apiFormat = config.get<string>('apiFormat', 'openai'); 
   
   console.log('=== AI Feedback Configuration ===');
   console.log('templateId:', templateId);
