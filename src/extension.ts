@@ -7,8 +7,8 @@ import axios from 'axios';
 import simpleGit, { SimpleGit } from 'simple-git';
 import * as tmp from 'tmp';
 
-const GIT_REPO_URL = 'https://github.com/teachnology/promptfolio.git';
-const LOCAL_REPO_PATH = path.join(os.tmpdir(), 'promptfolio_repo');
+const GIT_REPO_URL = 'https://github.com/esemsc-sg524/leveled_prompt.git';
+const LOCAL_REPO_PATH = path.join(os.tmpdir(), 'leveled_prompt_repo');
 let cachedTemplates: { id: string, filename: string, description?: string }[] = [];
 let extensionContext: vscode.ExtensionContext;
 
@@ -35,9 +35,9 @@ async function refreshTemplateCache(): Promise<void> {
   try {
     await syncGitRepo();
     cachedTemplates = await listLocalTemplates();
-    console.log('📝 Template cache refreshed:', cachedTemplates.length, 'templates found');
+    console.log('📝 Templates loaded:', cachedTemplates.length);
   } catch (error) {
-    console.error('❌ Failed to refresh template cache:', error);
+    console.error('❌ Failed to load templates:', error);
   }
 }
 
@@ -54,7 +54,7 @@ async function getPromptContent(promptId: string): Promise<string> {
   return fs.readFileSync(promptPath, 'utf8');
 }
 
-// ========== Hidden Tests Functions (from v0.1.0) ==========
+// ========== Hidden Tests Functions ==========
 async function getTestFiles(exerciseId: string): Promise<{ test: string, metadata: any }> {
   const testDir = path.join(LOCAL_REPO_PATH, 'tests', exerciseId);
   const testFile = fs.readdirSync(testDir).find(f => f.startsWith('test_') && f.endsWith('.py'));
@@ -67,17 +67,14 @@ async function getTestFiles(exerciseId: string): Promise<{ test: string, metadat
 }
 
 async function runLocalTest(code: string, test: string): Promise<any> {
-  // Create temporary directory
   const tmpDir = tmp.dirSync({ unsafeCleanup: true });
   const codePath = path.join(tmpDir.name, 'submission.py');
   const testPath = path.join(tmpDir.name, 'test_hidden.py');
   const reportPath = path.join(tmpDir.name, 'report.json');
 
-  // Write user code and test code
   fs.writeFileSync(codePath, code, 'utf8');
   fs.writeFileSync(testPath, test, 'utf8');
 
-  // Call pytest
   return new Promise((resolve) => {
     const python = process.platform === 'win32' ? 'python' : 'python3';
     const cmd = [
@@ -122,7 +119,6 @@ function extractExerciseId(code: string): string | null {
   return m ? m[1] : null;
 }
 
-// Helper function: Extract error message
 function extractErrorMessage(test: any): string {
   const call = test.call;
   if (call && typeof call === 'object') {
@@ -155,7 +151,6 @@ function extractErrorMessage(test: any): string {
   return `${testName} ${outcome}`;
 }
 
-// Helper function: Extract expected/actual values
 function extractExpectedValue(errorMessage: string): string {
   const patterns = [
     /should return (\d+)/i,
@@ -190,7 +185,6 @@ function extractActualValue(errorMessage: string): string {
   return '';
 }
 
-// Helper function: Generate improvement suggestions
 function generateSuggestions(failedTests: any[], metadata: any): string[] {
   const suggestions = new Set<string>();
   
@@ -300,7 +294,65 @@ function extractFeedbackLevel(feedback: string): string | null {
   return null;
 }
 
-// ========== Functions for Context Extraction ==========
+// ========== ENHANCED: Parameter Mismatch Detection ==========
+function hasParameterMismatch(problemDescription: string, code: string, output: string): boolean {
+  if (!problemDescription || !code || !output) return false;
+  
+  try {
+    // Look for "smaller than X" patterns
+    const smallerThanMatch = problemDescription.match(/smaller than (\d+)/i);
+    if (smallerThanMatch) {
+      const limit = parseInt(smallerThanMatch[1]);
+      
+      // Extract all numbers from output
+      const outputNumbers = output.match(/\b\d+\b/g);
+      if (outputNumbers) {
+        const nums = outputNumbers.map(n => parseInt(n));
+        const exceedsLimit = nums.some(num => num >= limit); // >= because "smaller than" means strictly less
+        
+        if (exceedsLimit) {
+          console.log(`🔍 Parameter mismatch detected: "smaller than ${limit}" but output contains ${nums.filter(n => n >= limit)}`);
+          return true;
+        }
+      }
+    }
+    
+    // Look for "less than X" patterns  
+    const lessThanMatch = problemDescription.match(/less than (\d+)/i);
+    if (lessThanMatch) {
+      const limit = parseInt(lessThanMatch[1]);
+      const outputNumbers = output.match(/\b\d+\b/g);
+      if (outputNumbers) {
+        const nums = outputNumbers.map(n => parseInt(n));
+        const exceedsLimit = nums.some(num => num >= limit);
+        
+        if (exceedsLimit) {
+          console.log(`🔍 Parameter mismatch detected: "less than ${limit}" but output contains ${nums.filter(n => n >= limit)}`);
+          return true;
+        }
+      }
+    }
+    
+    // Check function call parameters vs problem requirements
+    const functionCallMatch = code.match(/(\w+)\s*\(\s*(\d+)\s*\)/);
+    if (functionCallMatch && smallerThanMatch) {
+      const callLimit = parseInt(functionCallMatch[2]);
+      const problemLimit = parseInt(smallerThanMatch[1]);
+      
+      if (callLimit > problemLimit) {
+        console.log(`🔍 Function call mismatch: problem asks for < ${problemLimit}, but code calls with ${callLimit}`);
+        return true;
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    console.warn('Error in parameter mismatch detection:', error);
+    return false;
+  }
+}
+
+// ========== Context Extraction Functions ==========
 function getProblemDescription(editor: vscode.NotebookEditor, currentCell: vscode.NotebookCell): string {
   const currentIndex = currentCell.index;
   let problemDescription = '';
@@ -319,7 +371,6 @@ function getProblemDescription(editor: vscode.NotebookEditor, currentCell: vscod
         break;
       }
     }
-    
     else if (cell.kind === vscode.NotebookCellKind.Code) {
       break;
     }
@@ -328,7 +379,7 @@ function getProblemDescription(editor: vscode.NotebookEditor, currentCell: vscod
   return problemDescription.trim();
 }
 
-// ========== Enhanced Status Bar with Template Switching ==========
+// ========== Status Bar Management ==========
 let statusBarItem: vscode.StatusBarItem;
 
 function updateStatusBar(): void {
@@ -339,11 +390,11 @@ function updateStatusBar(): void {
   
   const currentTemplate = getCurrentTemplateId();
   statusBarItem.text = `$(file-text) ${currentTemplate}`;
-  statusBarItem.tooltip = `Current AI Feedback Template: ${currentTemplate}\n\nClick to select from available templates\nAvailable templates are loaded from GitHub repository`;
+  statusBarItem.tooltip = `Current AI Feedback Template: ${currentTemplate}\n\nClick to select from available templates\nTemplates are loaded from GitHub repository`;
   statusBarItem.show();
 }
 
-// ========== Template Selection Function ==========
+// ========== Template Selection Functions ==========
 async function showTemplateSelector(): Promise<void> {
   try {
     await vscode.window.withProgress({
@@ -434,19 +485,38 @@ function processTemplate(template: string, placeholders: { [key: string]: string
   return result.trim();
 }
 
-async function executeAndGetOutput(cell: vscode.NotebookCell): Promise<{ hasOutput: boolean, output: string, executionError: boolean }> {
-  try {
-    await vscode.commands.executeCommand('notebook.cell.execute', { ranges: [{ start: cell.index, end: cell.index + 1 }] });
-    
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    return getCellOutput(cell);
-  } catch (error) {
-    console.error('Error executing cell:', error);
-    return { hasOutput: false, output: '', executionError: true };
-  }
+// ========== Text Cleaning Helper Functions ==========
+function cleanOutputText(text: string): string {
+  return text
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .replace(/\r/g, '')
+    .replace(/\n\s*\n\s*\n/g, '\n\n')
+    .replace(/[ \t]+$/gm, '')
+    .trim();
 }
 
+function cleanErrorText(text: string): string {
+  return text
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .replace(/\r/g, '')
+    .trim();
+}
+
+function stripHtmlTags(html: string): string {
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// ========== Output Collection Functions ==========
 function getCellOutput(cell: vscode.NotebookCell): { hasOutput: boolean, output: string, executionError: boolean } {
   let outputText = '';
   let hasOutput = false;
@@ -454,31 +524,103 @@ function getCellOutput(cell: vscode.NotebookCell): { hasOutput: boolean, output:
   
   if (cell.outputs && cell.outputs.length > 0) {
     hasOutput = true;
+    
     for (const output of cell.outputs) {
       for (const item of output.items) {
-        if (item.mime === 'text/plain') {
-          const decoder = new TextDecoder();
-          outputText += decoder.decode(item.data) + '\n';
-        }
-        else if (item.mime === 'application/vnd.code.notebook.error') {
-          const decoder = new TextDecoder();
-          outputText += '[ERROR] ' + decoder.decode(item.data) + '\n';
-          executionError = true;
-        }
-        else if (item.mime === 'text/html') {
-          const decoder = new TextDecoder();
-          const htmlContent = decoder.decode(item.data);
-          const textOnly = htmlContent.replace(/<[^>]*>/g, '');
-          outputText += textOnly + '\n';
+        try {
+          if (item.mime === 'text/plain') {
+            const decoder = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
+            const text = decoder.decode(item.data);
+            outputText += cleanOutputText(text) + '\n';
+            
+          } else if (item.mime === 'application/vnd.code.notebook.error') {
+            const decoder = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
+            const errorText = decoder.decode(item.data);
+            outputText += '[ERROR] ' + cleanErrorText(errorText) + '\n';
+            executionError = true;
+            
+          } else if (item.mime === 'text/html') {
+            const decoder = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
+            const htmlContent = decoder.decode(item.data);
+            const textOnly = stripHtmlTags(htmlContent);
+            if (textOnly.trim()) {
+              outputText += textOnly + '\n';
+            }
+            
+          } else if (item.mime === 'application/vnd.code.notebook.stdout') {
+            const decoder = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
+            const text = decoder.decode(item.data);
+            outputText += cleanOutputText(text) + '\n';
+            
+          } else if (item.mime === 'application/vnd.code.notebook.stderr') {
+            const decoder = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
+            const errorText = decoder.decode(item.data);
+            outputText += '[STDERR] ' + cleanErrorText(errorText) + '\n';
+            executionError = true;
+            
+          } else if (item.mime.startsWith('image/')) {
+            outputText += '[IMAGE OUTPUT DETECTED]\n';
+            
+          } else if (item.mime === 'application/json') {
+            const decoder = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
+            const jsonText = decoder.decode(item.data);
+            outputText += '[JSON] ' + jsonText + '\n';
+            
+          } else {
+            try {
+              const decoder = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
+              const unknownText = decoder.decode(item.data);
+              if (unknownText.trim()) {
+                outputText += `[${item.mime.toUpperCase()}] ${unknownText}\n`;
+              }
+            } catch (decodeError) {
+              outputText += `[BINARY DATA: ${item.mime}]\n`;
+            }
+          }
+          
+        } catch (error) {
+          console.error(`Error processing output item (${item.mime}):`, error);
+          outputText += `[DECODE ERROR: ${item.mime}]\n`;
         }
       }
     }
   }
   
-  return { hasOutput, output: outputText.trim(), executionError };
+  const result = { hasOutput, output: outputText.trim(), executionError };
+  console.log('🔍 Output collected:', { hasOutput, outputLength: result.output.length, executionError });
+  
+  return result;
 }
 
-// ========== Enhanced Feedback Validation ==========
+async function executeAndGetOutput(cell: vscode.NotebookCell): Promise<{ hasOutput: boolean, output: string, executionError: boolean }> {
+  try {
+    await vscode.commands.executeCommand('notebook.cell.execute', { 
+      ranges: [{ start: cell.index, end: cell.index + 1 }] 
+    });
+    
+    let attempts = 0;
+    const maxAttempts = 10;
+    
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      attempts++;
+      
+      const currentOutput = getCellOutput(cell);
+      
+      if (currentOutput.hasOutput || attempts >= maxAttempts) {
+        return currentOutput;
+      }
+    }
+    
+    return getCellOutput(cell);
+    
+  } catch (error) {
+    console.error('Error executing cell:', error);
+    return { hasOutput: false, output: '', executionError: true };
+  }
+}
+
+// ========== RELAXED: Feedback Validation Functions ==========
 function countSentences(text: string): number {
   let cleanText = text
     .replace(/```[\s\S]*?```/g, '')
@@ -505,15 +647,40 @@ function countSentences(text: string): number {
   return sentences.length;
 }
 
-function validateFeedback(feedback: string, templateId: string): { isValid: boolean, warnings: string[] } {
+function hasExecutionError(output: string, executionError: boolean): boolean {
+  if (executionError) return true;
+  
+  const errorIndicators = [
+    'NameError',
+    'SyntaxError', 
+    'IndentationError',
+    'TypeError: invalid syntax',
+    'unexpected EOF',
+    'invalid syntax'
+  ];
+  
+  return errorIndicators.some(indicator => output.includes(indicator));
+}
+
+// ========== ENHANCED: Feedback Validation with Relaxed Standards ==========
+function validateFeedback(
+  feedback: string, 
+  templateId: string,
+  code?: string,
+  output?: string,
+  problemDescription?: string,
+  executionError?: boolean
+): { isValid: boolean, warnings: string[] } {
   const warnings: string[] = [];
   let isValid = true;
 
+  // Critical Issue 1: Code blocks in feedback
   if (feedback.includes('```')) {
     warnings.push('🚫 Contains code blocks - should use guiding questions instead');
     isValid = false;
   }
 
+  // Critical Issue 2: Complete code solutions
   const codePatterns = [
     /def\s+\w+\s*\([^)]*\)\s*:/,
     /class\s+\w+/,
@@ -531,50 +698,65 @@ function validateFeedback(feedback: string, templateId: string): { isValid: bool
     }
   }
 
-  if (templateId === 'four_level' || templateId === 'fourLevel' || templateId === 'leveled_feedback') {
-    const sentenceCount = countSentences(feedback);
-    
+  // Enhanced validation with execution error and parameter mismatch detection
+  if (code && output && problemDescription) {
     const detectedLevel = extractFeedbackLevel(feedback);
-    let maxSentences = 5;
-    let minSentences = 2;
     
-    switch (detectedLevel) {
-      case 'EXCELLENT':
-        maxSentences = 4;
-        minSentences = 2;
-        break;
-      case 'TARGETED':
-        maxSentences = 3;
-        minSentences = 2;
-        break;
-      case 'TACTICAL':
-        maxSentences = 4;
-        minSentences = 2;
-        break;
-      case 'STRATEGIC':
-        maxSentences = 5;
-        minSentences = 3;
-        break;
-      case 'CONCEPTUAL':
-        maxSentences = 5;
-        minSentences = 3;
-        break;
-      default:
-        maxSentences = 4;
-        minSentences = 2;
-    }
-    
-    if (sentenceCount > maxSentences) {
-      warnings.push(`📏 Too verbose: ${sentenceCount} sentences (${detectedLevel || 'General'} level should be ≤${maxSentences})`);
+    // Critical Issue 3: EXCELLENT rating with parameter mismatch
+    if (detectedLevel === 'EXCELLENT' && hasParameterMismatch(problemDescription, code, output)) {
+      warnings.push('🚫 EXCELLENT rating but code parameters don\'t match problem requirements');
       isValid = false;
     }
     
-    if (sentenceCount < minSentences) {
-      warnings.push(`📏 Too brief: ${sentenceCount} sentences (should be ≥${minSentences} for complete guidance)`);
+    // Critical Issue 4: Execution errors should be TARGETED
+    if (hasExecutionError(output, executionError || false) && detectedLevel && detectedLevel !== 'TARGETED') {
+      warnings.push(`🚫 Execution error (NameError/SyntaxError) should be TARGETED, not ${detectedLevel}`);
       isValid = false;
     }
   }
 
+  // RELAXED: Sentence count validation - more lenient standards
+  if (templateId === 'four_level' || templateId === 'fourLevel' || templateId === 'leveled_feedback') {
+    const sentenceCount = countSentences(feedback);
+    
+    const detectedLevel = extractFeedbackLevel(feedback);
+    let maxSentences = 8; // More lenient default
+    let minSentences = 1; // Allow single sentence feedback
+    
+    switch (detectedLevel) {
+      case 'EXCELLENT':
+        maxSentences = 8;
+        minSentences = 1;
+        break;
+      case 'TARGETED':
+        maxSentences = 6; // Increased from 3
+        minSentences = 1;
+        break;
+      case 'TACTICAL':
+        maxSentences = 7; // Increased from 4
+        minSentences = 1;
+        break;
+      case 'STRATEGIC':
+        maxSentences = 8; // Increased from 5
+        minSentences = 1;
+        break;
+      case 'CONCEPTUAL':
+        maxSentences = 8; // Increased from 5
+        minSentences = 1;
+        break;
+      default:
+        maxSentences = 7;
+        minSentences = 1;
+    }
+    
+    // Only trigger warnings for extreme cases
+    if (sentenceCount > maxSentences) {
+      warnings.push(`📏 Too verbose: ${sentenceCount} sentences (${detectedLevel || 'General'} level should be ≤${maxSentences})`);
+      // Don't fail validation for sentence count alone - just warn
+    }
+  }
+
+  // Warning only: Check for leveled format
   if (templateId === 'four_level' || templateId === 'fourLevel' || templateId === 'leveled_feedback') {
     const hasLevelFormat = /[✅🚨🤔🏗️💡]\s*(EXCELLENT|TARGETED|TACTICAL|STRATEGIC|CONCEPTUAL)/i.test(feedback);
     if (!hasLevelFormat) {
@@ -596,7 +778,7 @@ async function insertFeedback(
   if (templateId === 'four_level' || templateId === 'fourLevel' || templateId === 'leveled_feedback') {
     const detectedLevel = extractFeedbackLevel(feedback);
     if (detectedLevel) {
-      console.log(`Leveled feedback classification detected: ${detectedLevel}`);
+      console.log(`✅ Feedback level detected: ${detectedLevel}`);
     }
   }
 
@@ -652,17 +834,8 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
   const includeProblemDescription = config.get<boolean>('includeProblemDescription', true);
   const includeCodeOutput = config.get<boolean>('includeCodeOutput', true);
   const autoExecuteCode = config.get<boolean>('autoExecuteCode', true);
-  const useHiddenTests = config.get<boolean>('useHiddenTests', false); 
-  const apiFormat = config.get<string>('apiFormat', 'openai'); 
-  
-  console.log('=== AI Feedback Configuration ===');
-  console.log('templateId:', templateId);
-  console.log('modelName:', modelName);
-  console.log('apiUrl:', apiUrl);
-  console.log('useHiddenTests:', useHiddenTests);
-  console.log('apiFormat:', apiFormat);
-  console.log('retryCount:', retryCount);
-  console.log('=== End Configuration ===');
+  const useHiddenTests = config.get<boolean>('useHiddenTests', false);
+  const apiFormat = config.get<string>('apiFormat', 'openai');
   
   const activeEditor = vscode.window.activeNotebookEditor;
   if (!activeEditor) {
@@ -694,11 +867,9 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
     cancellable: false
   }, async (progress) => {
     try {
-      progress.report({ increment: 10, message: 'Syncing repository...' });
+      progress.report({ increment: 10, message: 'Loading template...' });
       
       await syncGitRepo();
-      
-      progress.report({ increment: 20, message: 'Loading template...' });
       
       let userPrompt: string;
       try {
@@ -710,18 +881,17 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
       
       progress.report({ increment: 30, message: 'Extracting context...' });
       
-      // ========== Extract Context ==========
       const problemDescription = includeProblemDescription ? getProblemDescription(activeEditor, cell) : '';
       
       let cellOutputResult = { hasOutput: false, output: '', executionError: false };
       
       if (includeCodeOutput) {
         if (autoExecuteCode) {
-          progress.report({ increment: 40, message: 'Auto-executing code...' });
+          progress.report({ increment: 40, message: 'Executing code...' });
           try {
             cellOutputResult = await executeAndGetOutput(cell);
           } catch (error) {
-            console.warn('⚠️ Failed to auto-execute cell:', error);
+            console.warn('Failed to auto-execute cell:', error);
             cellOutputResult = getCellOutput(cell);
           }
         } else {
@@ -729,7 +899,7 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
         }
       }
       
-      // ========== 🔥 Hidden Tests Integration ==========
+      // Hidden tests integration
       let hiddenTestAnalysis = '';
       if (useHiddenTests) {
         progress.report({ increment: 50, message: 'Running hidden tests...' });
@@ -779,16 +949,15 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
               }
             }
           } catch (error) {
-            console.warn('⚠️ Hidden tests failed:', error);
+            console.warn('Hidden tests failed:', error);
             hiddenTestAnalysis = `## Hidden Test Status\nTests could not be executed: ${error}\n`;
           }
         } else {
-          console.warn('⚠️ No EXERCISE_ID found for hidden tests');
           hiddenTestAnalysis = `## Hidden Test Status\nNo EXERCISE_ID found in code. Add # EXERCISE_ID: your_exercise_id to enable hidden tests.\n`;
         }
       }
       
-      // ========== Build Context for Template Placeholders ==========
+      // Build context for template placeholders
       let problemContext = '';
       if (problemDescription) {
         problemContext = `## Problem Description\n${problemDescription}\n`;
@@ -814,7 +983,6 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
         }
       }
       
-      // Process template with all placeholders
       const placeholders = {
         'code': code,
         'problem_description': problemContext,
@@ -826,25 +994,26 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
       
       progress.report({ increment: 70, message: 'Calling AI API...' });
       
+      // ENHANCED: More precise system prompts for first-try success
       const system_role = retryCount > 0 
-        ? "You are a Python teaching assistant. CRITICAL: You must NEVER provide any code solutions or code blocks. " +
-          "ONLY ask guiding questions and provide conceptual hints. " +
-          "Students must discover solutions themselves through your questions. " +
-          "Keep responses under 100 words. Use the four-level format if specified in template. " +
-          "You may receive problem descriptions, code outputs, and hidden test results - use them for better guidance."
-        : "You are a patient and detail-oriented Python teaching assistant. " +
-          "Based on the analysis below, provide step-by-step, targeted feedback:\n" +
-          "- Ask leading questions that guide the student toward discovering the solution, rather than giving full code.\n" +
-          "- If helpful, recommend relevant learning resources or key concepts.\n" +
-          "- Be encouraging and constructive in your feedback.\n" +
-          "- You may receive problem descriptions, code outputs, and hidden test results.\n" +
-          "- Use all available context to provide better guidance.\n\n";
+        ? "You are a Python teaching assistant. CRITICAL RULES:\n" +
+          "1. NEVER provide code solutions or code blocks\n" +
+          "2. NameError/SyntaxError/IndentationError = 🚨 TARGETED (never TACTICAL)\n" +
+          "3. Algorithm correct but wrong parameters = 🤔 TACTICAL\n" +
+          "4. Only use ✅ EXCELLENT when output matches ALL requirements\n" +
+          "5. Keep under 80 words\n" +
+          "6. Follow exact format: [EMOJI] [LEVEL] - [sentence]\n\n"
+        : "You are a precise Python teaching assistant. CRITICAL CLASSIFICATION RULES:\n" +
+          "1. Check execution status FIRST: NameError, SyntaxError, IndentationError → 🚨 TARGETED\n" +
+          "2. If code runs but output doesn't match problem requirements → 🤔 TACTICAL\n" +
+          "3. Only use ✅ EXCELLENT when code works AND fully meets ALL problem requirements\n" +
+          "4. Never provide code solutions - only hints and guiding questions\n" +
+          "5. Follow the exact format and keep response focused\n" +
+          "6. Check if output numbers match problem constraints (e.g., 'smaller than 50')\n\n";
       
-      // ========== 🔥 API Format Support ==========
       let feedback: string;
       try {
         if (apiFormat === 'ollama') {
-          // Ollama API format
           const body = {
             model: modelName,
             prompt: system_role + contextualPrompt
@@ -863,7 +1032,6 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
             }
           );
           
-          // Parse streaming response
           const lines = resp.data.split('\n').filter((line: string) => line.trim());
           let fullResponse = '';
           
@@ -881,7 +1049,6 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
           feedback = fullResponse;
           
         } else {
-          // OpenAI API format (default)
           const body = {
             model: modelName,
             messages: [
@@ -909,55 +1076,67 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
           }
         }
         
-        // ========== Feedback Validation ==========
-        const validation = validateFeedback(feedback, templateId);
+        // ENHANCED: Validation with relaxed sentence count standards
+        const validation = validateFeedback(
+          feedback, 
+          templateId,
+          code,
+          cellOutputResult.output,
+          problemDescription,
+          cellOutputResult.executionError
+        );
         
         if (!validation.isValid) {
-          console.warn('⚠️ Feedback validation failed:', validation.warnings);
+          console.warn('Feedback validation failed:', validation.warnings);
           
           const hasCriticalViolations = validation.warnings.some(warning => 
-            warning.includes('Contains code solutions') || warning.includes('Contains code blocks')
+            warning.includes('Contains code solutions') || 
+            warning.includes('Contains code blocks') ||
+            warning.includes('EXCELLENT rating but') ||
+            warning.includes('should be TARGETED')
           );
           
           if (hasCriticalViolations && retryCount < MAX_RETRIES) {
             console.log(`🔄 Auto-regenerating feedback (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
             vscode.window.showInformationMessage(
-              `🚫 AI provided code instead of guidance. Auto-regenerating... (${retryCount + 1}/${MAX_RETRIES + 1})`
+              `🔄 Improving feedback accuracy... (${retryCount + 1}/${MAX_RETRIES + 1})`
             );
             
             return await generateAIFeedback(cell, retryCount + 1);
             
           } else if (hasCriticalViolations && retryCount >= MAX_RETRIES) {
             vscode.window.showErrorMessage(
-              '❌ Unable to generate proper educational feedback after multiple attempts. Please try again later or check template settings.'
+              '❌ Unable to generate accurate feedback after multiple attempts. Please try again later.'
             );
             return;
             
           } else {
-            const action = await vscode.window.showWarningMessage(
-              `AI Feedback format issues:\n${validation.warnings.join('\n')}\n\nProceed anyway?`,
-              'Insert Anyway',
-              'Cancel'
+            // Only show dialog for critical issues, not for sentence count warnings
+            const criticalIssues = validation.warnings.filter(w => 
+              !w.includes('Too verbose') && !w.includes('Missing leveled format')
             );
             
-            if (action === 'Cancel') {
-              return;
+            if (criticalIssues.length > 0) {
+              const action = await vscode.window.showWarningMessage(
+                `AI Feedback issues:\n${criticalIssues.join('\n')}\n\nProceed anyway?`,
+                'Insert Anyway',
+                'Cancel'
+              );
+              
+              if (action === 'Cancel') {
+                return;
+              }
             }
+            // If only minor warnings (sentence count, format), proceed without asking
           }
-        } else if (validation.warnings.length > 0) {
-          console.info('ℹ️ Feedback warnings:', validation.warnings);
         }
         
         if (retryCount > 0 && validation.isValid) {
-          vscode.window.showInformationMessage(`✅ Generated proper educational feedback on attempt ${retryCount + 1}`);
+          vscode.window.showInformationMessage(`✅ Generated accurate feedback on attempt ${retryCount + 1}`);
         }
 
       } catch (e: any) {
-        console.error('=== API Error Debug ===');
-        console.error('Error:', e);
-        console.error('Error Response:', e.response?.data);
-        console.error('Error Status:', e.response?.status);
-        console.error('=== End API Error Debug ===');
+        console.error('API call failed:', e);
         
         let errorMessage = 'AI API call failed: ' + e.message;
         if (e.response?.data) {
@@ -995,9 +1174,8 @@ export function activate(ctx: vscode.ExtensionContext) {
   
   refreshTemplateCache().then(() => {
     updateStatusBar();
-    console.log(`📋 Template cache initialized with ${cachedTemplates.length} templates`);
   }).catch(error => {
-    console.warn('⚠️ Failed to initialize template cache:', error);
+    console.warn('Failed to initialize template cache:', error);
     updateStatusBar();
   });
 
@@ -1035,7 +1213,6 @@ export function activate(ctx: vscode.ExtensionContext) {
     )
   );
 
-  // Template management commands
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
       'jupyterAiFeedback.listTemplates',
@@ -1089,7 +1266,6 @@ export function activate(ctx: vscode.ExtensionContext) {
     )
   );
 
-  // 🔥 Exercise management command (from v0.1.0)
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
       'jupyterAiFeedback.listExercises',
