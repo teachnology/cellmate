@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import { existsSync } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as cp from 'child_process';
@@ -10,12 +11,32 @@ import * as tmp from 'tmp';
 const GIT_REPO_URL = 'https://github.com/teachnology/promptfolio.git';
 const LOCAL_REPO_PATH = path.join(os.tmpdir(), 'promptfolio_repo');
 
-async function syncGitRepo() {
-  const git: SimpleGit = simpleGit();
-  if (!fs.existsSync(LOCAL_REPO_PATH)) {
-    await git.clone(GIT_REPO_URL, LOCAL_REPO_PATH);
-  } else {
-    await git.cwd(LOCAL_REPO_PATH).pull();
+
+async function isValidRepo(dir: string): Promise<boolean> {
+  const git: SimpleGit = simpleGit(dir);
+  try {
+    await git.revparse(['--is-inside-work-tree']);
+    return true;                      // normal git package
+  } catch {
+    return false;                     // rev-parse fail => not valid
+  }
+}
+
+async function syncGitRepo(): Promise<void> {
+  const repoOk = existsSync(LOCAL_REPO_PATH) && await isValidRepo(LOCAL_REPO_PATH);
+
+  if (!repoOk) {
+    await fs.promises.rm(LOCAL_REPO_PATH, { recursive: true, force: true }).catch(() => {});
+    await simpleGit().clone(GIT_REPO_URL, LOCAL_REPO_PATH, ['--depth', '1']);
+    return;
+  }
+
+  try {
+    await simpleGit(LOCAL_REPO_PATH).pull();
+  } catch (err) {
+    console.warn('pull 失败，重新克隆：', err);
+    await fs.promises.rm(LOCAL_REPO_PATH, { recursive: true, force: true });
+    await simpleGit().clone(GIT_REPO_URL, LOCAL_REPO_PATH, ['--depth', '1']);
   }
 }
 
@@ -210,9 +231,164 @@ function generateSuggestions(failedTests: any[], metadata: any): string[] {
   return Array.from(suggestions);
 }
 
+// Helper function: Generate concise test summary
+function generateConciseTestSummary(failedTests: any[], totalTests: number): string {
+  if (failedTests.length === 0) {
+    return '';
+  }
+  
+  const passed = totalTests - failedTests.length;
+  const successRate = Math.round((passed / totalTests) * 100);
+  
+  // Extract test cases with expected vs actual values
+  const testCases = [];
+  
+  for (const test of failedTests) {
+    const testName = test.nodeid.split('::').pop() || 'Unknown Test';
+    const errorMessage = extractErrorMessage(test);
+    const expectedValue = extractExpectedValue(errorMessage);
+    const actualValue = extractActualValue(errorMessage);
+    
+    // Try to extract input parameter from test name
+    let inputParam = '';
+    const inputMatch = testName.match(/\((\d+)\)/);
+    if (inputMatch) {
+      inputParam = inputMatch[1];
+    }
+    
+    if (expectedValue && actualValue) {
+      testCases.push({
+        test: testName,
+        input: inputParam,
+        expected: expectedValue,
+        actual: actualValue
+      });
+    }
+  }
+  
+  // Select representative cases (first 2 with different patterns)
+  const representativeCases = [];
+  const seenPatterns = new Set();
+  
+  for (const testCase of testCases) {
+    const pattern = `${testCase.expected}-${testCase.actual}`;
+    if (representativeCases.length < 2 && !seenPatterns.has(pattern)) {
+      representativeCases.push(testCase);
+      seenPatterns.add(pattern);
+    }
+  }
+  
+  // Generate summary
+  let summary = `## Test Summary\n`;
+  summary += `- ${totalTests} tests, ${passed} passed, ${failedTests.length} failed (${successRate}%)\n\n`;
+  
+  if (representativeCases.length > 0) {
+    summary += `### Representative Failures\n`;
+    summary += `| Test | n | Expected | Actual |\n`;
+    summary += `|:----:|:--:|:--------:|:------:|\n`;
+    
+    for (const testCase of representativeCases) {
+      // Extract function name and parameter for cleaner display
+      const funcMatch = testCase.test.match(/^(\w+)\((\d+)\)$/);
+      if (funcMatch) {
+        summary += `| ${funcMatch[1]}(${funcMatch[2]}) | ${funcMatch[2]} | ${testCase.expected} | ${testCase.actual} |\n`;
+      } else {
+        summary += `| ${testCase.test} | ${testCase.input} | ${testCase.expected} | ${testCase.actual} |\n`;
+      }
+    }
+    summary += `\n`;
+  }
+  
+  return summary;
+}
+
 function extractExerciseId(code: string): string | null {
   const m = code.match(/^\s*#\s*EXERCISE_ID\s*:\s*([A-Za-z0-9_\-]+)/m);
   return m ? m[1] : null;
+}
+
+// Helper function: Get markdown cell content above the current cell
+function getMarkdownAbove(notebook: vscode.NotebookDocument, currentIndex: number): string {
+  if (currentIndex <= 0) return '';
+  
+  const cellAbove = notebook.cellAt(currentIndex - 1);
+  if (cellAbove.kind === vscode.NotebookCellKind.Markup) {
+    return cellAbove.document.getText().trim();
+  }
+  
+  return '';
+}
+
+// ───────────────────────────────────────────────────────────
+// delete ANSI code
+function stripAnsi(str: string): string {
+  // match 0x1B  CSI / OSC sequence
+  return str.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+/**
+ * read cell output
+ * - support stdout / stderr
+ *   (application/vnd.code.notebook.{stdout|stderr})
+ * - support text/plain
+ * - support error item (application/vnd.code.notebook.error)
+ *   delete ANSI code
+ */
+function getCellOutput(
+  cell: vscode.NotebookCell
+): { hasOutput: boolean; output: string; executionError: boolean } {
+  let outputText = '';
+  let hasOutput = false;
+  let executionError = false;
+
+  const decoder = new TextDecoder();
+
+  for (const output of cell.outputs ?? []) {
+    hasOutput = true;
+
+    for (const item of output.items) {
+      const mime = item.mime;
+      const raw = decoder.decode(item.data);
+
+      // ── 1. normal text / stdout / stderr ──────────────────────
+      if (
+        mime === 'text/plain' ||
+        mime === 'application/vnd.code.notebook.stdout' ||
+        mime === 'application/vnd.code.notebook.stderr'
+      ) {
+        outputText += stripAnsi(raw) + '\n';
+        continue;
+      }
+
+      // ── 2. execution error object ─────────────────────────────────
+      if (mime === 'application/vnd.code.notebook.error') {
+        try {
+          const errObj = JSON.parse(raw);
+          const pretty =
+            `${errObj.name}: ${errObj.message}\n` +
+            stripAnsi(errObj.stack || '');
+          outputText += '[ERROR] ' + pretty + '\n';
+        } catch {
+          // JSON 解析失败时退化为原始字符串
+          outputText += '[ERROR] ' + stripAnsi(raw) + '\n';
+        }
+        executionError = true;
+        continue;
+      }
+
+      // ── 3. text/html to text ────────────────────────
+      if (mime === 'text/html') {
+        const textOnly = raw.replace(/<[^>]*>/g, '');
+        outputText += stripAnsi(textOnly) + '\n';
+        continue;
+      }
+
+      // ── 4. other types ────────────────────────
+      outputText += stripAnsi(raw) + '\n';
+    }
+  }
+
+  return { hasOutput, output: outputText.trim(), executionError };
 }
 
 export function activate(ctx: vscode.ExtensionContext) {
@@ -315,18 +491,11 @@ export function activate(ctx: vscode.ExtensionContext) {
               analysis += `## Failed Test Details\n\n`;
               const failedTests = testResult.report.tests.filter((t: any) => t.outcome === 'failed');
               
-              failedTests.forEach((test: any, index: number) => {
-                const testName = test.nodeid.split('::').pop() || 'Unknown Test';
-                const errorMessage = extractErrorMessage(test);
-                const expectedValue = extractExpectedValue(errorMessage);
-                const actualValue = extractActualValue(errorMessage);
-                
-                analysis += `### ${index + 1}. ${testName}\n`;
-                analysis += `**Error Message:** ${errorMessage}\n`;
-                if (expectedValue) analysis += `**Expected:** ${expectedValue}\n`;
-                if (actualValue) analysis += `**Actual:** ${actualValue}\n`;
-                analysis += `\n`;
-              });
+              // Generate concise test summary
+              const conciseSummary = generateConciseTestSummary(failedTests, total);
+              if (conciseSummary) {
+                analysis += conciseSummary;
+              }
               
               // Generate improvement suggestions
               const suggestions = generateSuggestions(failedTests, metadata);
@@ -337,6 +506,9 @@ export function activate(ctx: vscode.ExtensionContext) {
                 });
                 analysis += `\n`;
               }
+            } else {
+              analysis += `## Test Results\n`;
+              analysis += `- All ${total} tests passed! ✅\n\n`;
             }
           } else {
             analysis += `## Test Execution Issues\n`;
@@ -358,6 +530,32 @@ export function activate(ctx: vscode.ExtensionContext) {
         console.log("promptContent:", promptContent)
         console.log("analysis:", analysis)
         let prompt = promptContent.replace('{{code}}', code);
+        
+        // Check if prompt contains placeholders before getting content
+        const hasProblemDescription = prompt.includes('{{problem_description}}');
+        const hasCodeOutput = prompt.includes('{{code_output}}');
+        
+        // Only get markdown above if placeholder exists
+        if (hasProblemDescription) {
+          const markdownAbove = getMarkdownAbove(editor.notebook, cell.index);
+          if (markdownAbove) {
+            prompt = prompt.replace('{{problem_description}}', markdownAbove);
+            console.log("markdownAbove:", markdownAbove)
+          } else {
+            prompt = prompt.replace('{{problem_description}}', '');
+          }
+        }
+        
+        // Only get cell output if placeholder exists
+        if (hasCodeOutput) {
+          const cellOutput = getCellOutput(cell);
+          if (cellOutput.hasOutput) {
+            prompt = prompt.replace('{{code_output}}', cellOutput.output);
+            console.log("cellOutput:", cellOutput.output)
+          } else {
+            prompt = prompt.replace('{{code_output}}', '');
+          }
+        }
         
         // Add analysis to prompt only if useHiddenTests is enabled and analysis exists
         if (useHiddenTests && analysis) {
@@ -444,15 +642,15 @@ export function activate(ctx: vscode.ExtensionContext) {
 
         // Insert an empty Markdown cell
         await vscode.commands.executeCommand('notebook.cell.insertMarkdownCellBelow');
-        console.log('insert markdown cell');
 
         // Find the newly inserted cell
         const newCell = editor.notebook.cellAt(cell.index + 1);
         if (!newCell) {
-          vscode.window.showErrorMessage(' cannot Markdown cell');
+          vscode.window.showErrorMessage('Cannot insert Markdown cell');
           return;
         }
         const doc = newCell.document;
+        
         // Replace the cell content with WorkspaceEdit
         const lastLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
         const fullRange = new vscode.Range(
@@ -520,7 +718,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         await syncGitRepo();
         const templates = await listLocalTemplates();
         if (templates.length === 0) {
-          vscode.window.showInformationMessage('no available templates');
+          vscode.window.showInformationMessage('No available templates');
           return;
         }
         // 生成下拉选项
@@ -529,13 +727,13 @@ export function activate(ctx: vscode.ExtensionContext) {
           description: t.filename
         }));
         const pick = await vscode.window.showQuickPick(items, {
-          placeHolder: 'please select a template'
+          placeHolder: 'Please select a template'
         });
         if (pick) {
           // 写入配置
           await vscode.workspace.getConfiguration('jupyterAiFeedback')
             .update('templateId', pick.label, vscode.ConfigurationTarget.Global);
-          vscode.window.showInformationMessage(`choose template: ${pick.label}`);
+          vscode.window.showInformationMessage(`Selected template: ${pick.label}`);
         }
       }
     )
