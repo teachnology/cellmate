@@ -7,8 +7,8 @@ import axios from 'axios';
 import simpleGit, { SimpleGit } from 'simple-git';
 import * as tmp from 'tmp';
 
-const GIT_REPO_URL = 'https://github.com/esemsc-sg524/leveled_prompt.git';
-const LOCAL_REPO_PATH = path.join(os.tmpdir(), 'leveled_prompt_repo');
+const GIT_REPO_URL = 'https://github.com/teachnology/promptfolio.git';
+const LOCAL_REPO_PATH = path.join(os.tmpdir(), 'promptfolio_repo');
 let cachedTemplates: { id: string, filename: string, description?: string }[] = [];
 let extensionContext: vscode.ExtensionContext;
 
