@@ -1,8 +1,8 @@
 {
   "name": "vscode-jupyter-ai-feedback",
   "displayName": "Jupyter AI Feedback",
-  "description": "Add AI Feedback buttons to .ipynb Python cells, using templates from GitHub repository. Features leveled feedback: ✅ EXCELLENT, 🚨 TARGETED, 🤔 TACTICAL, 🏗️ STRATEGIC, 💡 CONCEPTUAL.",
-  "version": "0.2.0",
+  "description": "Add AI Feedback buttons to .ipynb Python cells, using templates from GitHub repository. Features leveled feedback: ✅ EXCELLENT, 🚨 TARGETED, 🤔 TACTICAL, 🏗️ STRATEGIC, 💡 CONCEPTUAL. Supports hidden tests and multiple AI providers.",
+  "version": "0.3.0",
   "publisher": "cellmate",
   "engines": {
     "vscode": "^1.60.0"
@@ -13,10 +13,12 @@
   "main": "./out/extension.js",
   "dependencies": {
     "axios": "^1.5.0",
-    "simple-git": "^3.19.1"
+    "simple-git": "^3.19.1",
+    "tmp": "^0.2.3"
   },
   "devDependencies": {
     "@types/node": "^18.7.18",
+    "@types/tmp": "^0.2.6",
     "@types/vscode": "^1.75.0",
     "@vscode/test-electron": "^2.3.0",
     "typescript": "^4.9.5"
@@ -29,7 +31,7 @@
       "properties": {
         "jupyterAiFeedback.apiUrl": {
           "type": "string",
-          "description": "API URL for the LLM service (Open WebUI or Ollama compatible)"
+          "description": "API URL for the LLM service (Open WebUI, Ollama, or OpenAI compatible)"
         },
         "jupyterAiFeedback.apiKey": {
           "type": "string",
@@ -38,7 +40,13 @@
         "jupyterAiFeedback.modelName": {
           "type": "string",
           "default": "llama4:scout",
-          "description": "The model name used for AI feedback (e.g., llama3.3:latest, qwen, codellama)"
+          "description": "The model name used for AI feedback (e.g., llama3.3:latest, qwen, codellama, gpt-4)"
+        },
+        "jupyterAiFeedback.apiFormat": {
+          "type": "string",
+          "enum": ["openai", "ollama"],
+          "default": "openai",
+          "description": "API format to use: 'openai' for OpenAI/Open WebUI format, 'ollama' for Ollama streaming format"
         },
         "jupyterAiFeedback.includeProblemDescription": {
           "type": "boolean",
@@ -54,6 +62,11 @@
           "type": "boolean",
           "default": true, 
           "description": "Automatically execute the code cell before generating feedback to get fresh output"
+        },
+        "jupyterAiFeedback.useHiddenTests": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable hidden tests feature - automatically run unit tests and include results in AI context (requires EXERCISE_ID in code)"
         }
       }
     },
@@ -80,6 +93,10 @@
         "command": "jupyterAiFeedback.refreshTemplates", 
         "title": "Refresh Templates from Repository",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "jupyterAiFeedback.listExercises",
+        "title": "List Available Exercises (for Hidden Tests)"
       }
     ],
     "menus": {
@@ -99,6 +116,9 @@
         },
         {
           "command": "jupyterAiFeedback.refreshTemplates"
+        },
+        {
+          "command": "jupyterAiFeedback.listExercises"
         }
       ]
     }

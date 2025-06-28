@@ -2,8 +2,10 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as cp from 'child_process';
 import axios from 'axios';
 import simpleGit, { SimpleGit } from 'simple-git';
+import * as tmp from 'tmp';
 
 const GIT_REPO_URL = 'https://github.com/teachnology/promptfolio.git';
 const LOCAL_REPO_PATH = path.join(os.tmpdir(), 'promptfolio_repo');
@@ -52,6 +54,174 @@ async function getPromptContent(promptId: string): Promise<string> {
   return fs.readFileSync(promptPath, 'utf8');
 }
 
+// ========== Hidden Tests Functions (from v0.1.0) ==========
+async function getTestFiles(exerciseId: string): Promise<{ test: string, metadata: any }> {
+  const testDir = path.join(LOCAL_REPO_PATH, 'tests', exerciseId);
+  const testFile = fs.readdirSync(testDir).find(f => f.startsWith('test_') && f.endsWith('.py'));
+  const metadataFile = path.join(testDir, 'metadata.json');
+  if (!testFile || !fs.existsSync(metadataFile)) throw new Error('Test or metadata not found');
+  return {
+    test: fs.readFileSync(path.join(testDir, testFile), 'utf8'),
+    metadata: JSON.parse(fs.readFileSync(metadataFile, 'utf8'))
+  };
+}
+
+async function runLocalTest(code: string, test: string): Promise<any> {
+  // Create temporary directory
+  const tmpDir = tmp.dirSync({ unsafeCleanup: true });
+  const codePath = path.join(tmpDir.name, 'submission.py');
+  const testPath = path.join(tmpDir.name, 'test_hidden.py');
+  const reportPath = path.join(tmpDir.name, 'report.json');
+
+  // Write user code and test code
+  fs.writeFileSync(codePath, code, 'utf8');
+  fs.writeFileSync(testPath, test, 'utf8');
+
+  // Call pytest
+  return new Promise((resolve) => {
+    const python = process.platform === 'win32' ? 'python' : 'python3';
+    const cmd = [
+      python, '-m', 'pytest', testPath,
+      '--json-report', `--json-report-file=${reportPath}`,
+      '--tb=short', '-v'
+    ];
+    const proc = cp.spawn(cmd[0], cmd.slice(1), { cwd: tmpDir.name });
+
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (data) => stdout += data.toString());
+    proc.stderr.on('data', (data) => stderr += data.toString());
+
+    proc.on('close', () => {
+      let report = {};
+      if (fs.existsSync(reportPath)) {
+        report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+      }
+      tmpDir.removeCallback();
+      resolve({ stdout, stderr, report });
+    });
+  });
+}
+
+async function listLocalExercises(): Promise<any[]> {
+  const exercisesDir = path.join(LOCAL_REPO_PATH, 'tests');
+  if (!fs.existsSync(exercisesDir)) return [];
+  const exerciseIds = fs.readdirSync(exercisesDir).filter(f => fs.statSync(path.join(exercisesDir, f)).isDirectory());
+  return exerciseIds.map(id => {
+    const metaPath = path.join(exercisesDir, id, 'metadata.json');
+    let meta = {};
+    if (fs.existsSync(metaPath)) {
+      meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    }
+    return { id, ...meta };
+  });
+}
+
+function extractExerciseId(code: string): string | null {
+  const m = code.match(/^\s*#\s*EXERCISE_ID\s*:\s*([A-Za-z0-9_\-]+)/m);
+  return m ? m[1] : null;
+}
+
+// Helper function: Extract error message
+function extractErrorMessage(test: any): string {
+  const call = test.call;
+  if (call && typeof call === 'object') {
+    const longrepr = call.longrepr;
+    if (typeof longrepr === 'string' && longrepr.trim()) {
+      return longrepr.trim();
+    }
+  }
+  
+  const longrepr = test.longrepr;
+  if (typeof longrepr === 'string' && longrepr.trim()) {
+    return longrepr.trim();
+  } else if (longrepr && typeof longrepr === 'object') {
+    const msg = longrepr.longrepr || longrepr.reprcrash?.message || '';
+    if (msg) return msg.trim();
+  }
+  
+  for (const phase of ['setup', 'teardown']) {
+    const phaseData = test[phase];
+    if (phaseData && typeof phaseData === 'object') {
+      const msg = phaseData.longrepr;
+      if (typeof msg === 'string' && msg.trim()) {
+        return msg.trim();
+      }
+    }
+  }
+  
+  const testName = test.nodeid?.split('::').pop() || 'Unknown Test';
+  const outcome = test.outcome || 'failed';
+  return `${testName} ${outcome}`;
+}
+
+// Helper function: Extract expected/actual values
+function extractExpectedValue(errorMessage: string): string {
+  const patterns = [
+    /should return (\d+)/i,
+    /expected (\d+)/i,
+    /assert \d+ == (\d+)/i,
+    /Expected:\s*(\d+)/i,
+    /expected\s+([^,\n]+)/i,
+    /should be\s+([^,\n]+)/i,
+  ];
+  
+  for (const pattern of patterns) {
+    const match = errorMessage.match(pattern);
+    if (match) return match[1].trim();
+  }
+  return '';
+}
+
+function extractActualValue(errorMessage: string): string {
+  const patterns = [
+    /but got (\d+)/i,
+    /got (\d+)/i,
+    /assert (\d+) == \d+/i,
+    /Actual:\s*(\d+)/i,
+    /got\s+([^,\n]+)/i,
+    /returned\s+([^,\n]+)/i,
+  ];
+  
+  for (const pattern of patterns) {
+    const match = errorMessage.match(pattern);
+    if (match) return match[1].trim();
+  }
+  return '';
+}
+
+// Helper function: Generate improvement suggestions
+function generateSuggestions(failedTests: any[], metadata: any): string[] {
+  const suggestions = new Set<string>();
+  
+  for (const test of failedTests) {
+    const errorMessage = extractErrorMessage(test);
+    
+    if (errorMessage.includes('NotImplementedError')) {
+      suggestions.add('Please ensure the required function is defined');
+    } else if (errorMessage.includes('TypeError')) {
+      suggestions.add('Please check function parameter types and count');
+    } else if (errorMessage.includes('RecursionError')) {
+      suggestions.add('Recursion depth too large, consider using iteration');
+    } else if (errorMessage.includes('AssertionError')) {
+      suggestions.add('Please check if the function return value is correct');
+    } else if (errorMessage.includes('NameError')) {
+      suggestions.add('Please check if the function name is correct');
+    } else if (errorMessage.includes('IndentationError')) {
+      suggestions.add('Please check if the code indentation is correct');
+    } else if (errorMessage.includes('SyntaxError')) {
+      suggestions.add('Please check if the code syntax is correct');
+    } else if (errorMessage.toLowerCase().includes('timeout')) {
+      suggestions.add('Code execution timeout, possible infinite loop');
+    }
+  }
+  
+  const hints = metadata?.hints || [];
+  hints.slice(0, 2).forEach((hint: string) => suggestions.add(hint));
+  
+  return Array.from(suggestions);
+}
+
 async function listLocalTemplates(): Promise<{ id: string, filename: string, description?: string }[]> {
   const promptsDir = path.join(LOCAL_REPO_PATH, 'prompts');
   if (!fs.existsSync(promptsDir)) return [];
@@ -64,11 +234,9 @@ async function listLocalTemplates(): Promise<{ id: string, filename: string, des
     let description = '';
     
     try {
-      // Try to extract description from the template file
       const content = fs.readFileSync(path.join(promptsDir, file), 'utf8');
-      const lines = content.split('\n').slice(0, 10); // Check first 10 lines
+      const lines = content.split('\n').slice(0, 10);
       
-      // Look for description patterns
       for (const line of lines) {
         const trimmedLine = line.trim();
         if (trimmedLine.startsWith('**Description:**')) {
@@ -83,7 +251,6 @@ async function listLocalTemplates(): Promise<{ id: string, filename: string, des
         }
       }
       
-      // Fallback: use template name-based description
       if (!description) {
         if (id === 'leveled_feedback') description = 'Five-level structured feedback system';
         else if (id === 'four_level') description = 'Original four-level feedback system';
@@ -102,7 +269,6 @@ async function listLocalTemplates(): Promise<{ id: string, filename: string, des
     templates.push({ id, filename: file, description });
   }
   
-  // Sort templates: put common ones first
   const priorityOrder = ['leveled_feedback', 'four_level'];
   templates.sort((a, b) => {
     const aIndex = priorityOrder.indexOf(a.id);
@@ -131,7 +297,6 @@ function extractFeedbackLevel(feedback: string): string | null {
       return level;
     }
   }
-  
   return null;
 }
 
@@ -140,27 +305,21 @@ function getProblemDescription(editor: vscode.NotebookEditor, currentCell: vscod
   const currentIndex = currentCell.index;
   let problemDescription = '';
   
-  // Look backwards for markdown cells that might contain problem description
   for (let i = currentIndex - 1; i >= 0; i--) {
     const cell = editor.notebook.cellAt(i);
     
-    // If find a markdown cell, extract its content
     if (cell.kind === vscode.NotebookCellKind.Markup) {
       const content = cell.document.getText().trim();
       
-      // Skip empty markdown cells
       if (!content) continue;
       
-      // Add this markdown content to problem description
       problemDescription = content + '\n\n' + problemDescription;
       
-      // Stop after finding substantial content or reaching reasonable limit
       if (content.length > 100 || problemDescription.length > 1000) {
         break;
       }
     }
     
-    // Stop looking if encounter another code cell (end of current problem scope)
     else if (cell.kind === vscode.NotebookCellKind.Code) {
       break;
     }
@@ -184,51 +343,9 @@ function updateStatusBar(): void {
   statusBarItem.show();
 }
 
-// ========== Quick Template Switching ==========
-async function quickTemplateSwitch(): Promise<void> {
-  const templates = await getAvailableTemplates();
-  const currentTemplateId = getCurrentTemplateId();
-  
-  if (templates.length <= 1) {
-    vscode.window.showInformationMessage('Only one template available. Use "Refresh Templates" to check for more.');
-    return;
-  }
-  
-  // Create a simple quick pick for fast switching between common templates
-  const quickItems = templates.slice(0, 5).map(template => ({
-    label: template.id === currentTemplateId ? `$(check) ${template.id}` : `$(file-text) ${template.id}`,
-    description: template.description,
-    templateId: template.id
-  }));
-  
-  // Add "More templates..." option if there are many templates
-  if (templates.length > 5) {
-    quickItems.push({
-      label: '$(ellipsis) More templates...',
-      description: `Show all ${templates.length} available templates`,
-      templateId: '__more__'
-    });
-  }
-  
-  const selected = await vscode.window.showQuickPick(quickItems, {
-    title: 'Quick Template Switch',
-    placeHolder: `Current: ${currentTemplateId}`
-  });
-  
-  if (selected) {
-    if (selected.templateId === '__more__') {
-      return showTemplateSelector();
-    } else if (selected.templateId !== currentTemplateId) {
-      await setCurrentTemplateId(selected.templateId);
-      vscode.window.showInformationMessage(`✅ Template switched to: ${selected.templateId}`);
-    }
-  }
-}
-
 // ========== Template Selection Function ==========
 async function showTemplateSelector(): Promise<void> {
   try {
-    // Show loading with progress
     await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
       title: 'Loading available templates...',
@@ -236,7 +353,6 @@ async function showTemplateSelector(): Promise<void> {
     }, async (progress) => {
       progress.report({ increment: 50, message: 'Syncing repository...' });
       
-      // Get available templates
       const templates = await getAvailableTemplates();
       
       progress.report({ increment: 100, message: 'Templates loaded!' });
@@ -250,17 +366,15 @@ async function showTemplateSelector(): Promise<void> {
         
         if (action === 'Refresh Templates') {
           await refreshTemplateCache();
-          return showTemplateSelector(); // Retry
+          return showTemplateSelector();
         } else if (action === 'Check Settings') {
           vscode.commands.executeCommand('workbench.action.openSettings', 'jupyterAiFeedback');
         }
         return;
       }
       
-      // Get current template
       const currentTemplateId = getCurrentTemplateId();
       
-      // Create QuickPick items with enhanced information
       const items: vscode.QuickPickItem[] = templates.map(template => {
         const isCurrent = template.id === currentTemplateId;
         return {
@@ -271,14 +385,12 @@ async function showTemplateSelector(): Promise<void> {
         };
       });
       
-      // Add refresh option at the top
       items.unshift({
         label: '$(refresh) Refresh Templates',
         description: 'Reload templates from GitHub repository',
         detail: 'Click to check for new or updated templates'
       });
       
-      // Show QuickPick
       const selected = await vscode.window.showQuickPick(items, {
         title: 'Select AI Feedback Template',
         placeHolder: `Current: ${currentTemplateId} (${templates.length} templates available)`,
@@ -290,9 +402,8 @@ async function showTemplateSelector(): Promise<void> {
         if (selected.label.includes('Refresh Templates')) {
           await refreshTemplateCache();
           vscode.window.showInformationMessage(`✅ Templates refreshed! Found ${cachedTemplates.length} templates.`);
-          return showTemplateSelector(); // Show selector again with refreshed list
+          return showTemplateSelector();
         } else {
-          // Extract template ID from label
           const templateId = selected.label.replace(/^\$\([^)]+\)\s*/, '');
           
           if (templateId !== currentTemplateId) {
@@ -308,19 +419,16 @@ async function showTemplateSelector(): Promise<void> {
     vscode.window.showErrorMessage(`Failed to load templates: ${error}`);
   }
 }
+
 function processTemplate(template: string, placeholders: { [key: string]: string }): string {
   let result = template;
   
-  // Replace all placeholders with their values
   for (const [key, value] of Object.entries(placeholders)) {
     const placeholder = `{{${key}}}`;
     result = result.replace(new RegExp(placeholder, 'g'), value);
   }
   
-  // Clean up any remaining empty placeholders (in case template has placeholders we don't provide)
   result = result.replace(/\{\{[^}]+\}\}/g, '');
-  
-  // Clean up extra whitespace that might result from empty placeholders
   result = result.replace(/\n\s*\n\s*\n/g, '\n\n');
   
   return result.trim();
@@ -328,13 +436,10 @@ function processTemplate(template: string, placeholders: { [key: string]: string
 
 async function executeAndGetOutput(cell: vscode.NotebookCell): Promise<{ hasOutput: boolean, output: string, executionError: boolean }> {
   try {
-    // Execute the cell
     await vscode.commands.executeCommand('notebook.cell.execute', { ranges: [{ start: cell.index, end: cell.index + 1 }] });
     
-    // Wait a bit for execution to complete and outputs to be available
     await new Promise(resolve => setTimeout(resolve, 2000));
     
-    // Now get the output
     return getCellOutput(cell);
   } catch (error) {
     console.error('Error executing cell:', error);
@@ -347,28 +452,22 @@ function getCellOutput(cell: vscode.NotebookCell): { hasOutput: boolean, output:
   let hasOutput = false;
   let executionError = false;
   
-  // Check if cell has any outputs
   if (cell.outputs && cell.outputs.length > 0) {
     hasOutput = true;
     for (const output of cell.outputs) {
-      // Handle different types of outputs
       for (const item of output.items) {
-        // Text output (print statements, errors, etc.)
         if (item.mime === 'text/plain') {
           const decoder = new TextDecoder();
           outputText += decoder.decode(item.data) + '\n';
         }
-        // Error output
         else if (item.mime === 'application/vnd.code.notebook.error') {
           const decoder = new TextDecoder();
           outputText += '[ERROR] ' + decoder.decode(item.data) + '\n';
           executionError = true;
         }
-        // HTML output (for rich displays)
         else if (item.mime === 'text/html') {
           const decoder = new TextDecoder();
           const htmlContent = decoder.decode(item.data);
-          // Strip HTML tags for cleaner text
           const textOnly = htmlContent.replace(/<[^>]*>/g, '');
           outputText += textOnly + '\n';
         }
@@ -379,59 +478,49 @@ function getCellOutput(cell: vscode.NotebookCell): { hasOutput: boolean, output:
   return { hasOutput, output: outputText.trim(), executionError };
 }
 
-// ========== Enhanced Sentence Counting Function ==========
+// ========== Enhanced Feedback Validation ==========
 function countSentences(text: string): number {
-  // Clean the text first - remove markdown formatting, code blocks, etc.
   let cleanText = text
-    .replace(/```[\s\S]*?```/g, '') // Remove code blocks
-    .replace(/`[^`]+`/g, '')        // Remove inline code
-    .replace(/\*\*([^*]+)\*\*/g, '$1') // Remove bold formatting
-    .replace(/\*([^*]+)\*/g, '$1')     // Remove italic formatting
-    .replace(/#{1,6}\s+/g, '')         // Remove markdown headers
-    .replace(/^\s*[-*+]\s+/gm, '')     // Remove list items
-    .replace(/^\s*\d+\.\s+/gm, '')     // Remove numbered lists
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`[^`]+`/g, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/#{1,6}\s+/g, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
     .trim();
 
   if (!cleanText) return 0;
 
-  // Split by sentence endings: . ! ? 
-  // But be careful with abbreviations and decimals
   const sentences = cleanText
     .split(/[.!?]+/)
     .map(s => s.trim())
     .filter(s => {
-      // Filter out empty strings and very short fragments
       if (!s || s.length < 10) return false;
-      
-      // Filter out fragments that are just numbers or single words
       if (/^\d+(\.\d+)?$/.test(s)) return false;
       if (/^\w+$/.test(s) && !['yes', 'no', 'true', 'false'].includes(s.toLowerCase())) return false;
-      
       return true;
     });
 
   return sentences.length;
 }
 
-// ========== Updated Feedback Validation Function (Sentence-based) ==========
 function validateFeedback(feedback: string, templateId: string): { isValid: boolean, warnings: string[] } {
   const warnings: string[] = [];
   let isValid = true;
 
-  // Check for code blocks
   if (feedback.includes('```')) {
     warnings.push('🚫 Contains code blocks - should use guiding questions instead');
     isValid = false;
   }
 
-  // Check for complete code solutions
   const codePatterns = [
-    /def\s+\w+\s*\([^)]*\)\s*:/,     // function definitions
-    /class\s+\w+/,                  // class definitions
-    /return\s+[\w\s+\-*\/]+/,       // return statements
-    /if\s+[\w\s]+:/,                // if statements
-    /for\s+\w+\s+in\s+/,            // for loops
-    /while\s+[\w\s]+:/,             // while loops
+    /def\s+\w+\s*\([^)]*\)\s*:/,
+    /class\s+\w+/,
+    /return\s+[\w\s+\-*\/]+/,
+    /if\s+[\w\s]+:/,
+    /for\s+\w+\s+in\s+/,
+    /while\s+[\w\s]+:/,
   ];
 
   for (const pattern of codePatterns) {
@@ -442,38 +531,36 @@ function validateFeedback(feedback: string, templateId: string): { isValid: bool
     }
   }
 
-  // Sentence count limit for leveled feedback templates
   if (templateId === 'four_level' || templateId === 'fourLevel' || templateId === 'leveled_feedback') {
     const sentenceCount = countSentences(feedback);
     
-    // Different limits based on feedback level
     const detectedLevel = extractFeedbackLevel(feedback);
-    let maxSentences = 5; // default
-    let minSentences = 2; // minimum for complete feedback
+    let maxSentences = 5;
+    let minSentences = 2;
     
     switch (detectedLevel) {
       case 'EXCELLENT':
-        maxSentences = 4; // Celebrate + suggest extensions
+        maxSentences = 4;
         minSentences = 2;
         break;
       case 'TARGETED':
-        maxSentences = 3; // Simple syntax issues
+        maxSentences = 3;
         minSentences = 2;
         break;
       case 'TACTICAL':
-        maxSentences = 4; // Style explanations
+        maxSentences = 4;
         minSentences = 2;
         break;
       case 'STRATEGIC':
-        maxSentences = 5; // Complex restructuring
+        maxSentences = 5;
         minSentences = 3;
         break;
       case 'CONCEPTUAL':
-        maxSentences = 5; // Concept guidance
+        maxSentences = 5;
         minSentences = 3;
         break;
       default:
-        maxSentences = 4; // General fallback
+        maxSentences = 4;
         minSentences = 2;
     }
     
@@ -488,7 +575,6 @@ function validateFeedback(feedback: string, templateId: string): { isValid: bool
     }
   }
 
-  // Check for leveled format (warning only, not invalid)
   if (templateId === 'four_level' || templateId === 'fourLevel' || templateId === 'leveled_feedback') {
     const hasLevelFormat = /[✅🚨🤔🏗️💡]\s*(EXCELLENT|TARGETED|TACTICAL|STRATEGIC|CONCEPTUAL)/i.test(feedback);
     if (!hasLevelFormat) {
@@ -506,7 +592,6 @@ async function insertFeedback(
   templateId: string
 ): Promise<void> {
 
-  // Add Leveled detection if it's a leveled feedback template
   let enhancedFeedback = feedback;
   if (templateId === 'four_level' || templateId === 'fourLevel' || templateId === 'leveled_feedback') {
     const detectedLevel = extractFeedbackLevel(feedback);
@@ -515,14 +600,11 @@ async function insertFeedback(
     }
   }
 
-  // Insert an empty Markdown cell
   await vscode.commands.executeCommand('notebook.cell.insertMarkdownCellBelow');
 
-  // Find the newly inserted cell
   const newCell = editor.notebook.cellAt(cell.index + 1);
   const doc = newCell.document;
 
-  // Replace the cell content with WorkspaceEdit
   const lastLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
   const fullRange = new vscode.Range(
     0,
@@ -531,12 +613,10 @@ async function insertFeedback(
     doc.lineAt(lastLine).text.length
   );
   
-  // Enhanced feedback formatting
   let feedbackIcon = '🧠';
   let feedbackTitle = 'AI Feedback';
   
   if (templateId === 'four_level' || templateId === 'fourLevel' || templateId === 'leveled_feedback') {
-    // Try to extract emoji from feedback for Leveled system
     if (feedback.includes('✅')) {
       feedbackIcon = '✅';
       feedbackTitle = 'EXCELLENT Feedback';
@@ -562,7 +642,7 @@ async function insertFeedback(
 }
 
 async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number = 0): Promise<void> {
-  const MAX_RETRIES = 2; // Maximum number of auto-retries
+  const MAX_RETRIES = 2;
   
   const config = vscode.workspace.getConfiguration('jupyterAiFeedback');
   const templateId = getCurrentTemplateId();
@@ -572,11 +652,15 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
   const includeProblemDescription = config.get<boolean>('includeProblemDescription', true);
   const includeCodeOutput = config.get<boolean>('includeCodeOutput', true);
   const autoExecuteCode = config.get<boolean>('autoExecuteCode', true);
+  const useHiddenTests = config.get<boolean>('useHiddenTests', false); // 🔥 集成隐藏测试功能
+  const apiFormat = config.get<string>('apiFormat', 'openai'); // 🔥 新增API格式选择
   
   console.log('=== AI Feedback Configuration ===');
   console.log('templateId:', templateId);
   console.log('modelName:', modelName);
   console.log('apiUrl:', apiUrl);
+  console.log('useHiddenTests:', useHiddenTests);
+  console.log('apiFormat:', apiFormat);
   console.log('retryCount:', retryCount);
   console.log('=== End Configuration ===');
   
@@ -592,40 +676,6 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
     return;
   }
 
-  // ========== Extract Additional Context ==========
-  // Get problem description from previous markdown cells (if enabled)
-  const problemDescription = includeProblemDescription ? getProblemDescription(activeEditor, cell) : '';
-  
-  // Auto-execute code and get output (if enabled)
-  let cellOutputResult = { hasOutput: false, output: '', executionError: false };
-  
-  if (includeCodeOutput) {
-    if (autoExecuteCode) {
-      // First, execute the cell to get fresh output
-      console.log('🔄 Auto-executing code cell...');
-      try {
-        cellOutputResult = await executeAndGetOutput(cell);
-      } catch (error) {
-        console.warn('⚠️ Failed to auto-execute cell:', error);
-        cellOutputResult = getCellOutput(cell); // Fallback to existing output
-      }
-    } else {
-      // Just get existing output without executing
-      cellOutputResult = getCellOutput(cell);
-    }
-  }
-  
-  console.log('=== Context Extraction ===');
-  console.log('Include Problem Description:', includeProblemDescription);
-  console.log('Include Code Output:', includeCodeOutput);
-  console.log('Auto Execute Code:', autoExecuteCode);
-  console.log('Problem Description Length:', problemDescription.length);
-  console.log('Has Output:', cellOutputResult.hasOutput);
-  console.log('Output Length:', cellOutputResult.output.length);
-  console.log('Execution Error:', cellOutputResult.executionError);
-  console.log('=== End Context ===');
-
-  // Check API configuration
   if (!apiUrl || !apiKey || !modelName) {
     const action = await vscode.window.showErrorMessage(
       'AI Feedback requires API configuration. Please set your API URL, API Key, and model in settings.',
@@ -646,12 +696,10 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
     try {
       progress.report({ increment: 10, message: 'Syncing repository...' });
       
-      // Git repository sync
       await syncGitRepo();
       
       progress.report({ increment: 20, message: 'Loading template...' });
       
-      // Get prompt content from Git repository
       let userPrompt: string;
       try {
         userPrompt = await getPromptContent(templateId);
@@ -662,49 +710,90 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
       
       progress.report({ increment: 30, message: 'Extracting context...' });
       
-      // ========== Extract Additional Context ==========
-      // Get problem description from previous markdown cells (if enabled)
+      // ========== Extract Context ==========
       const problemDescription = includeProblemDescription ? getProblemDescription(activeEditor, cell) : '';
       
-      // Auto-execute code and get output (if enabled)
       let cellOutputResult = { hasOutput: false, output: '', executionError: false };
       
       if (includeCodeOutput) {
         if (autoExecuteCode) {
-          // First, execute the cell to get fresh output
           progress.report({ increment: 40, message: 'Auto-executing code...' });
-          console.log('🔄 Auto-executing code cell...');
           try {
             cellOutputResult = await executeAndGetOutput(cell);
           } catch (error) {
             console.warn('⚠️ Failed to auto-execute cell:', error);
-            cellOutputResult = getCellOutput(cell); // Fallback to existing output
+            cellOutputResult = getCellOutput(cell);
           }
         } else {
-          // Just get existing output without executing
           cellOutputResult = getCellOutput(cell);
         }
       }
       
-      console.log('=== Context Extraction ===');
-      console.log('Include Problem Description:', includeProblemDescription);
-      console.log('Include Code Output:', includeCodeOutput);
-      console.log('Auto Execute Code:', autoExecuteCode);
-      console.log('Problem Description Length:', problemDescription.length);
-      console.log('Has Output:', cellOutputResult.hasOutput);
-      console.log('Output Length:', cellOutputResult.output.length);
-      console.log('Execution Error:', cellOutputResult.executionError);
-      console.log('=== End Context ===');
+      // ========== 🔥 Hidden Tests Integration ==========
+      let hiddenTestAnalysis = '';
+      if (useHiddenTests) {
+        progress.report({ increment: 50, message: 'Running hidden tests...' });
+        
+        const exId = extractExerciseId(code);
+        if (exId) {
+          try {
+            const { test, metadata } = await getTestFiles(exId);
+            const testResult = await runLocalTest(code, test);
+            
+            if (testResult.report && testResult.report.tests) {
+              const total = testResult.report.tests.length;
+              const passed = testResult.report.tests.filter((t: any) => t.outcome === 'passed').length;
+              const failed = total - passed;
+              
+              hiddenTestAnalysis += `## Hidden Test Results\n`;
+              hiddenTestAnalysis += `- **Total Tests:** ${total}\n`;
+              hiddenTestAnalysis += `- **Passed:** ${passed} ✅\n`;
+              hiddenTestAnalysis += `- **Failed:** ${failed} ❌\n`;
+              hiddenTestAnalysis += `- **Success Rate:** ${Math.round((passed / total) * 100)}%\n\n`;
+              
+              if (failed > 0) {
+                hiddenTestAnalysis += `## Failed Test Details\n\n`;
+                const failedTests = testResult.report.tests.filter((t: any) => t.outcome === 'failed');
+                
+                failedTests.forEach((test: any, index: number) => {
+                  const testName = test.nodeid.split('::').pop() || 'Unknown Test';
+                  const errorMessage = extractErrorMessage(test);
+                  const expectedValue = extractExpectedValue(errorMessage);
+                  const actualValue = extractActualValue(errorMessage);
+                  
+                  hiddenTestAnalysis += `### ${index + 1}. ${testName}\n`;
+                  hiddenTestAnalysis += `**Error Message:** ${errorMessage}\n`;
+                  if (expectedValue) hiddenTestAnalysis += `**Expected:** ${expectedValue}\n`;
+                  if (actualValue) hiddenTestAnalysis += `**Actual:** ${actualValue}\n`;
+                  hiddenTestAnalysis += `\n`;
+                });
+                
+                const suggestions = generateSuggestions(failedTests, metadata);
+                if (suggestions.length > 0) {
+                  hiddenTestAnalysis += `## Improvement Suggestions\n`;
+                  suggestions.forEach(suggestion => {
+                    hiddenTestAnalysis += `- ${suggestion}\n`;
+                  });
+                  hiddenTestAnalysis += `\n`;
+                }
+              }
+            }
+          } catch (error) {
+            console.warn('⚠️ Hidden tests failed:', error);
+            hiddenTestAnalysis = `## Hidden Test Status\nTests could not be executed: ${error}\n`;
+          }
+        } else {
+          console.warn('⚠️ No EXERCISE_ID found for hidden tests');
+          hiddenTestAnalysis = `## Hidden Test Status\nNo EXERCISE_ID found in code. Add # EXERCISE_ID: your_exercise_id to enable hidden tests.\n`;
+        }
+      }
       
       // ========== Build Context for Template Placeholders ==========
-      
-      // Prepare problem description context
       let problemContext = '';
       if (problemDescription) {
         problemContext = `## Problem Description\n${problemDescription}\n`;
       }
       
-      // Prepare code output context
       let outputContext = '';
       if (includeCodeOutput) {
         if (cellOutputResult.executionError) {
@@ -729,136 +818,138 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
       const placeholders = {
         'code': code,
         'problem_description': problemContext,
-        'code_output': outputContext
+        'code_output': outputContext,
+        'hidden_test_results': hiddenTestAnalysis
       };
       
       const contextualPrompt = processTemplate(userPrompt, placeholders);
       
-      console.log('=== Final Prompt Preview ===');
-      console.log('Total Length:', contextualPrompt.length);
-      console.log('Has Problem Description:', !!problemDescription);
-      console.log('Has Output:', cellOutputResult.hasOutput);
-      console.log('Output Content:', !!cellOutputResult.output);
-      console.log('Auto Executed:', autoExecuteCode);
-      console.log('Template Placeholders:', Object.keys(placeholders));
-      console.log('=== End Prompt Preview ===');
+      progress.report({ increment: 70, message: 'Calling AI API...' });
       
-      progress.report({ increment: 60, message: 'Calling AI API...' });
-      
-      // Enhanced system prompt to prevent code solutions
       const system_role = retryCount > 0 
         ? "You are a Python teaching assistant. CRITICAL: You must NEVER provide any code solutions or code blocks. " +
           "ONLY ask guiding questions and provide conceptual hints. " +
           "Students must discover solutions themselves through your questions. " +
           "Keep responses under 100 words. Use the four-level format if specified in template. " +
-          "You may receive problem descriptions and code outputs - use them for better guidance. " +
-          "If code hasn't been executed, suggest testing it first to see what happens."
+          "You may receive problem descriptions, code outputs, and hidden test results - use them for better guidance."
         : "You are a patient and detail-oriented Python teaching assistant. " +
           "Based on the analysis below, provide step-by-step, targeted feedback:\n" +
           "- Ask leading questions that guide the student toward discovering the solution, rather than giving full code.\n" +
           "- If helpful, recommend relevant learning resources or key concepts.\n" +
           "- Be encouraging and constructive in your feedback.\n" +
-          "- You may receive problem descriptions from markdown cells and code outputs.\n" +
-          "- If code hasn't been executed yet, consider suggesting the student run it first to see what happens.\n" +
-          "- Use all available context (problem description, code, and output status) to provide better guidance.\n\n";
+          "- You may receive problem descriptions, code outputs, and hidden test results.\n" +
+          "- Use all available context to provide better guidance.\n\n";
       
-      // OpenAI API body structure
-      const body = {
-        model: modelName,
-        messages: [
-          { role: 'system', content: system_role },
-          { role: 'user', content: contextualPrompt }
-        ]
-      };
-      
-      // API call logic
+      // ========== 🔥 API Format Support ==========
       let feedback: string;
       try {
-        console.log('=== API Request Debug ===');
-        console.log('API URL:', apiUrl);
-        console.log('Model Name:', modelName);
-        console.log('Request Body:', JSON.stringify(body, null, 2));
-        console.log('=== End API Request Debug ===');
-        
-        const resp = await axios.post(
-          apiUrl,
-          body,
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`
-            },
-            timeout: 60000
-          }
-        );
-        
-        console.log('=== API Response Debug ===');
-        console.log('Response Status:', resp.status);
-        console.log('Response Data:', JSON.stringify(resp.data, null, 2));
-        console.log('Response Headers:', resp.headers);
-        console.log('=== End API Response Debug ===');
-        
-        // Check if response is in OpenAI format
-        if (resp.data && resp.data.choices && resp.data.choices.length > 0) {
-          feedback = resp.data.choices[0].message.content;
-          console.log('✅ OpenAI format response parsed successfully');
+        if (apiFormat === 'ollama') {
+          // Ollama API format
+          const body = {
+            model: modelName,
+            prompt: system_role + contextualPrompt
+          };
           
-          // ========== Feedback Validation ==========
-          const validation = validateFeedback(feedback, templateId);
-          
-          if (!validation.isValid) {
-            console.warn('⚠️ Feedback validation failed:', validation.warnings);
-            
-            // Check for critical violations (code solutions)
-            const hasCriticalViolations = validation.warnings.some(warning => 
-              warning.includes('Contains code solutions') || warning.includes('Contains code blocks')
-            );
-            
-            if (hasCriticalViolations && retryCount < MAX_RETRIES) {
-              // Auto-regenerate for critical educational violations
-              console.log(`🔄 Auto-regenerating feedback (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
-              vscode.window.showInformationMessage(
-                `🚫 AI provided code instead of guidance. Auto-regenerating... (${retryCount + 1}/${MAX_RETRIES + 1})`
-              );
-              
-              // Recursive call with incremented retry count
-              return await generateAIFeedback(cell, retryCount + 1);
-              
-            } else if (hasCriticalViolations && retryCount >= MAX_RETRIES) {
-              // Max retries reached, give up
-              vscode.window.showErrorMessage(
-                '❌ Unable to generate proper educational feedback after multiple attempts. Please try again later or check template settings.'
-              );
-              return;
-              
-            } else {
-              // For non-critical issues (word count, format), give user choice
-              const action = await vscode.window.showWarningMessage(
-                `AI Feedback format issues:\n${validation.warnings.join('\n')}\n\nProceed anyway?`,
-                'Insert Anyway',
-                'Cancel'
-              );
-              
-              if (action === 'Cancel') {
-                return;
-              }
-              // If 'Insert Anyway', continue execution
+          const resp = await axios.post(
+            apiUrl,
+            body,
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+              },
+              responseType: 'text',
+              timeout: 60000
             }
-          } else if (validation.warnings.length > 0) {
-            console.info('ℹ️ Feedback warnings:', validation.warnings);
-            // Log warnings but don't block insertion
+          );
+          
+          // Parse streaming response
+          const lines = resp.data.split('\n').filter((line: string) => line.trim());
+          let fullResponse = '';
+          
+          for (const line of lines) {
+            try {
+              const jsonResponse = JSON.parse(line);
+              if (jsonResponse.response) {
+                fullResponse += jsonResponse.response;
+              }
+            } catch (e) {
+              console.warn('Failed to parse JSON line:', line);
+            }
           }
           
-          // If this is a retry and got valid feedback, show success message
-          if (retryCount > 0 && validation.isValid) {
-            vscode.window.showInformationMessage(`✅ Generated proper educational feedback on attempt ${retryCount + 1}`);
-          }
+          feedback = fullResponse;
           
         } else {
-          console.error('❌ Invalid response format from Open WebUI');
-          console.error('Expected: {choices: [{message: {content: "..."}}]}');
-          console.error('Received:', resp.data);
-          return vscode.window.showErrorMessage('Invalid response format from Open WebUI API.');
+          // OpenAI API format (default)
+          const body = {
+            model: modelName,
+            messages: [
+              { role: 'system', content: system_role },
+              { role: 'user', content: contextualPrompt }
+            ]
+          };
+          
+          const resp = await axios.post(
+            apiUrl,
+            body,
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+              },
+              timeout: 60000
+            }
+          );
+          
+          if (resp.data && resp.data.choices && resp.data.choices.length > 0) {
+            feedback = resp.data.choices[0].message.content;
+          } else {
+            throw new Error('Invalid response format from API');
+          }
+        }
+        
+        // ========== Feedback Validation ==========
+        const validation = validateFeedback(feedback, templateId);
+        
+        if (!validation.isValid) {
+          console.warn('⚠️ Feedback validation failed:', validation.warnings);
+          
+          const hasCriticalViolations = validation.warnings.some(warning => 
+            warning.includes('Contains code solutions') || warning.includes('Contains code blocks')
+          );
+          
+          if (hasCriticalViolations && retryCount < MAX_RETRIES) {
+            console.log(`🔄 Auto-regenerating feedback (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
+            vscode.window.showInformationMessage(
+              `🚫 AI provided code instead of guidance. Auto-regenerating... (${retryCount + 1}/${MAX_RETRIES + 1})`
+            );
+            
+            return await generateAIFeedback(cell, retryCount + 1);
+            
+          } else if (hasCriticalViolations && retryCount >= MAX_RETRIES) {
+            vscode.window.showErrorMessage(
+              '❌ Unable to generate proper educational feedback after multiple attempts. Please try again later or check template settings.'
+            );
+            return;
+            
+          } else {
+            const action = await vscode.window.showWarningMessage(
+              `AI Feedback format issues:\n${validation.warnings.join('\n')}\n\nProceed anyway?`,
+              'Insert Anyway',
+              'Cancel'
+            );
+            
+            if (action === 'Cancel') {
+              return;
+            }
+          }
+        } else if (validation.warnings.length > 0) {
+          console.info('ℹ️ Feedback warnings:', validation.warnings);
+        }
+        
+        if (retryCount > 0 && validation.isValid) {
+          vscode.window.showInformationMessage(`✅ Generated proper educational feedback on attempt ${retryCount + 1}`);
         }
 
       } catch (e: any) {
@@ -866,7 +957,6 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
         console.error('Error:', e);
         console.error('Error Response:', e.response?.data);
         console.error('Error Status:', e.response?.status);
-        console.error('Error Headers:', e.response?.headers);
         console.error('=== End API Error Debug ===');
         
         let errorMessage = 'AI API call failed: ' + e.message;
@@ -874,11 +964,8 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
           errorMessage += '\nResponse: ' + JSON.stringify(e.response.data, null, 2);
         }
         
-        // Error handling for common HTTP status codes
         if (e.response?.status === 405) {
-          errorMessage += '\n\n🔧 Method Not Allowed (405) - Check your API URL:';
-          errorMessage += '\n✅ Should be: http://your-server:8080/api/chat/completions';
-          errorMessage += '\n❌ NOT: http://your-server:8080/api/generate';
+          errorMessage += '\n\n🔧 Method Not Allowed (405) - Check your API URL and format setting';
         } else if (e.response?.status === 401) {
           errorMessage += '\n\n🔑 Authentication failed - Check your API key';
         } else if (e.response?.status === 404) {
@@ -890,7 +977,6 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
       
       progress.report({ increment: 90, message: 'Inserting feedback...' });
       
-      // Insert feedback with optional Four Level detection
       await insertFeedback(activeEditor, cell, feedback, templateId);
       
       progress.report({ increment: 100, message: 'Complete!' });
@@ -905,19 +991,16 @@ async function generateAIFeedback(cell: vscode.NotebookCell, retryCount: number 
 export function activate(ctx: vscode.ExtensionContext) {
   console.log('🚀 Jupyter AI Feedback extension is now active!');
   
-  // Store extension context for global state access
   extensionContext = ctx;
   
-  // Initialize template cache on activation
   refreshTemplateCache().then(() => {
     updateStatusBar();
     console.log(`📋 Template cache initialized with ${cachedTemplates.length} templates`);
   }).catch(error => {
     console.warn('⚠️ Failed to initialize template cache:', error);
-    updateStatusBar(); // Still show status bar with default
+    updateStatusBar();
   });
 
-  // Initialize status bar
   updateStatusBar();
   
   const provider: vscode.NotebookCellStatusBarItemProvider = {
@@ -943,7 +1026,6 @@ export function activate(ctx: vscode.ExtensionContext) {
     vscode.notebooks.registerNotebookCellStatusBarItemProvider('*', provider)
   );
 
-  // Command executed when button is clicked
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
       'jupyterAiFeedback.sendNotebookCell',
@@ -977,21 +1059,11 @@ export function activate(ctx: vscode.ExtensionContext) {
     )
   );
 
-  // ========== Template Selection Commands ==========
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
       'jupyterAiFeedback.selectTemplate',
       async () => {
         await showTemplateSelector();
-      }
-    )
-  );
-
-  ctx.subscriptions.push(
-    vscode.commands.registerCommand(
-      'jupyterAiFeedback.quickSwitch', 
-      async () => {
-        await quickTemplateSwitch();
       }
     )
   );
@@ -1017,7 +1089,28 @@ export function activate(ctx: vscode.ExtensionContext) {
     )
   );
 
-  // Register status bar item for cleanup
+  // 🔥 Exercise management command (from v0.1.0)
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand(
+      'jupyterAiFeedback.listExercises',
+      async () => {
+        await syncGitRepo();
+        const exercises = await listLocalExercises();
+        if (exercises.length === 0) {
+          vscode.window.showInformationMessage('No exercises available');
+          return;
+        }
+        const output = vscode.window.createOutputChannel('Exercise List');
+        output.show();
+        output.appendLine('Available Exercises:');
+        output.appendLine('==================');
+        exercises.forEach(e => {
+          output.appendLine(`ID: ${e.id}\nTitle: ${e.title || ''}\nDesc: ${e.description || ''}\n`);
+        });
+      }
+    )
+  );
+
   if (statusBarItem) {
     ctx.subscriptions.push(statusBarItem);
   }
@@ -1026,7 +1119,6 @@ export function activate(ctx: vscode.ExtensionContext) {
 export function deactivate() {
   console.log('👋 Jupyter AI Feedback extension deactivated');
   
-  // Clean up status bar item
   if (statusBarItem) {
     statusBarItem.dispose();
   }
