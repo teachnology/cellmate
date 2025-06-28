@@ -1,8 +1,9 @@
 {
   "name": "vscode-jupyter-ai-feedback",
   "displayName": "Jupyter AI Feedback",
-  "description": "为 .ipynb 每个 Python cell 添加 AI Feedback 按钮，发送代码并展示模型反馈。",
-  "version": "0.1.0",
+  "description": "Add AI Feedback buttons to .ipynb Python cells, using templates from GitHub repository. Features leveled feedback: ✅ EXCELLENT, 🚨 TARGETED, 🤔 TACTICAL, 🏗️ STRATEGIC, 💡 CONCEPTUAL.",
+  "version": "0.2.0",
+  "publisher": "cellmate",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -12,12 +13,10 @@
   "main": "./out/extension.js",
   "dependencies": {
     "axios": "^1.5.0",
-    "simple-git": "^3.19.1",
-    "tmp": "^0.2.3"
+    "simple-git": "^3.19.1"
   },
   "devDependencies": {
     "@types/node": "^18.7.18",
-    "@types/tmp": "^0.2.6",
     "@types/vscode": "^1.75.0",
     "@vscode/test-electron": "^2.3.0",
     "typescript": "^4.9.5"
@@ -30,7 +29,7 @@
       "properties": {
         "jupyterAiFeedback.apiUrl": {
           "type": "string",
-          "description": "API URL for the LLM service"
+          "description": "API URL for the LLM service (Open WebUI or Ollama compatible)"
         },
         "jupyterAiFeedback.apiKey": {
           "type": "string",
@@ -39,45 +38,69 @@
         "jupyterAiFeedback.modelName": {
           "type": "string",
           "default": "llama4:scout",
-          "description": "The model name used for AI feedback"
+          "description": "The model name used for AI feedback (e.g., llama3.3:latest, qwen, codellama)"
         },
-        "jupyterAiFeedback.templateId": {
-          "type": "string",
-          "default": "Standard Python Feedback",
-          "description": "Template ID to use for AI feedback (fetched from GitHub repository)"
-        },
-        "jupyterAiFeedback.useHiddenTests": {
+        "jupyterAiFeedback.includeProblemDescription": {
           "type": "boolean",
           "default": true,
-          "description": "Whether to use hidden tests to enhance the prompt with test analysis"
+          "description": "Include problem description from previous markdown cells in the AI context"
+        },
+        "jupyterAiFeedback.includeCodeOutput": {
+          "type": "boolean", 
+          "default": true,
+          "description": "Include code cell output (results, errors) in the AI context for better analysis"
+        },
+        "jupyterAiFeedback.autoExecuteCode": {
+          "type": "boolean",
+          "default": true, 
+          "description": "Automatically execute the code cell before generating feedback to get fresh output"
         }
       }
     },
     "commands": [
       {
         "command": "jupyterAiFeedback.sendNotebookCell",
-        "title": "Send Notebook Cell to AI Feedback"
+        "title": "Send Notebook Cell for AI Feedback"
       },
       {
         "command": "jupyterAiFeedback.listTemplates",
         "title": "List Available Templates"
       },
       {
-        "command": "jupyterAiFeedback.listExercises",
-        "title": "List Available Exercises"
+        "command": "jupyterAiFeedback.selectTemplate",
+        "title": "Select AI Feedback Template",
+        "icon": "$(selection)"
+      },
+      {
+        "command": "jupyterAiFeedback.quickSwitch",
+        "title": "Quick Switch Template",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "jupyterAiFeedback.refreshTemplates", 
+        "title": "Refresh Templates from Repository",
+        "icon": "$(refresh)"
       }
     ],
-    "notebookCellStatusBarItemProviders": [
-      {
-        "viewType": "*",
-        "items": [
-          {
-            "command": "jupyterAiFeedback.sendNotebookCell",
-            "alignment": "right",
-            "priority": 100
-          }
-        ]
-      }
-    ]
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "jupyterAiFeedback.sendNotebookCell",
+          "when": "notebookType == 'jupyter-notebook'"
+        },
+        {
+          "command": "jupyterAiFeedback.listTemplates"
+        },
+        {
+          "command": "jupyterAiFeedback.selectTemplate"
+        },
+        {
+          "command": "jupyterAiFeedback.quickSwitch"
+        },
+        {
+          "command": "jupyterAiFeedback.refreshTemplates"
+        }
+      ]
+    }
   }
 }
