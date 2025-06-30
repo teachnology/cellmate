@@ -1,0 +1,83 @@
+{
+  "name": "vscode-jupyter-ai-feedback",
+  "displayName": "Jupyter AI Feedback",
+  "description": "为 .ipynb 每个 Python cell 添加 AI Feedback 按钮，发送代码并展示模型反馈。",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "activationEvents": [
+    "onNotebook:*"
+  ],
+  "main": "./out/extension.js",
+  "dependencies": {
+    "axios": "^1.5.0",
+    "marked": "^16.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.7.18",
+    "@types/vscode": "^1.75.0",
+    "@vscode/test-electron": "^2.3.0",
+    "typescript": "^4.9.5"
+  },
+  "scripts": {
+    "compile": "tsc -p ."
+  },
+  "contributes": {
+    "configuration": {
+      "properties": {
+        "jupyterAiFeedback.apiUrl": {
+          "type": "string"
+        },
+        "jupyterAiFeedback.apiKey": {
+          "type": "string"
+        },
+        "jupyterAiFeedback.promptTemplate": {
+          "type": "string"
+        },
+        "jupyterAiFeedback.promptTemplateMark": {
+          "type": "string"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "jupyterAiFeedback.sendNotebookCell",
+        "title": "Send Notebook Cell to AI Feedback"
+      },
+      {
+        "command": "jupyterAiFeedback.askFollowUpFromButton",
+        "title": "Ask Follow-up Question (via Button)"
+      },
+      {
+        "command": "jupyterAiFeedback.explainActiveMarkdownCell",
+        "title": "Explain Current Markdown Cell"
+      }
+    ],
+    "notebookCellStatusBarItemProviders": [
+      {
+        "viewType": "*",
+        "items": [
+          {
+            "command": "jupyterAiFeedback.sendNotebooskCell",
+            "alignment": "right",
+            "priority": 100
+          },
+          {
+            "when": "notebookCellKind == markup",
+            "command": "jupyterAiFeedback.explainMarkdownCell",
+            "alignment": "right",
+            "priority": 100
+          }
+        ]
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "jupyterAiFeedback.explainMarkdownCell",
+        "key": "ctrl+alt+e",
+        "when": "notebookEditorFocused"
+      }
+    ]
+  }
+}
