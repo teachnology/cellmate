@@ -83,5 +83,8 @@
         ]
       }
     ]
-  }
+  },
+  "extensionDependencies": [
+    "ms-python.python"
+  ]
 }

@@ -35,7 +35,7 @@ async function syncGitRepo(): Promise<void> {
   try {
     await simpleGit(LOCAL_REPO_PATH).pull();
   } catch (err) {
-    console.warn('pull 失败，重新克隆：', err);
+    console.warn('pull failed, re-clone:', err);
     await fs.promises.rm(LOCAL_REPO_PATH, { recursive: true, force: true });
     await simpleGit().clone(GIT_REPO_URL, LOCAL_REPO_PATH, ['--depth', '1']);
   }
@@ -58,7 +58,51 @@ async function getTestFiles(exerciseId: string): Promise<{ test: string, metadat
   };
 }
 
-async function runLocalTest(code: string, test: string): Promise<any> {
+// get notebook python path
+async function getNotebookPythonPath(): Promise<string | undefined> {
+  const editor = vscode.window.activeNotebookEditor;
+  if (!editor) {
+    return;
+  }
+
+  // activate Python extension API
+  const pyExt = vscode.extensions.getExtension('ms-python.python');
+  if (!pyExt) {
+    return;
+  }
+  await pyExt.activate();
+  const pyApi = pyExt.exports;
+
+  // API file: https://github.com/microsoft/vscode-python/blob/main/src/api.ts
+  const execCmd = pyApi.settings.getExecutionDetails(editor.notebook.uri).execCommand;
+  return execCmd?.[0]; // execCmd [ '/Users/xxx/miniconda3/envs/py39/bin/python', ... ]
+}
+
+// check if python package is installed
+function checkPytestInstalled(pythonPath: string, pkg: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    cp.execFile(pythonPath, ['-m', 'pip', 'show', pkg], (err, stdout) => {
+      resolve(!!stdout && !err && stdout.includes(`Name: ${pkg}`));
+    });
+  });
+}
+
+// auto install python dependencies
+function ensurePythonDeps(pythonPath: string, pkgs: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    cp.execFile(pythonPath, ['-m', 'pip', 'install', ...pkgs], (err, stdout, stderr) => {
+      if (err) {
+        vscode.window.showErrorMessage(`install dependencies failed: ${stderr || err.message}`);
+        resolve(false);
+      } else {
+        vscode.window.showInformationMessage(`installed: ${pkgs.join(', ')}`);
+        resolve(true);
+      }
+    });
+  });
+}
+
+async function runLocalTest(code: string, test: string, pythonPath: string): Promise<any> {
   // Create temporary directory
   const tmpDir = tmp.dirSync({ unsafeCleanup: true });
   const codePath = path.join(tmpDir.name, 'submission.py');
@@ -71,9 +115,8 @@ async function runLocalTest(code: string, test: string): Promise<any> {
 
   // Call pytest
   return new Promise((resolve) => {
-    const python = process.platform === 'win32' ? 'python' : 'python3';
     const cmd = [
-      python, '-m', 'pytest', testPath,
+      pythonPath, '-m', 'pytest', testPath,
       '--json-report', `--json-report-file=${reportPath}`,
       '--tb=short', '-v'
     ];
@@ -504,8 +547,25 @@ export function activate(ctx: vscode.ExtensionContext) {
           }
           const { test, metadata } = await getTestFiles(exId);
 
+          // Get notebook Python path
+          const pythonPath = await getNotebookPythonPath();
+          console.log("pythonPath:", pythonPath)
+          if (!pythonPath) {
+            vscode.window.showErrorMessage('cannot detect the Python environment of the current Notebook, please select the kernel first');
+            return;
+          }
+
+          const requiredPkgs = ['pytest', 'pytest-json-report'];
+          for (const pkg of requiredPkgs) {
+            const hasPkg = await checkPytestInstalled(pythonPath, pkg);
+            if (!hasPkg) {
+              const ok = await ensurePythonDeps(pythonPath, [pkg]);
+              if (!ok) return;
+            }
+          }
+
           // Run tests locally
-          const testResult = await runLocalTest(code, test);
+          const testResult = await runLocalTest(code, test, pythonPath);
 
           // Parse test results and generate analysis
           if (testResult.report && testResult.report.tests) {
