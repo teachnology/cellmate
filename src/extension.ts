@@ -303,6 +303,11 @@ function generateConciseTestSummary(failedTests: any[], totalTests: number): str
   return summary;
 }
 
+function extractPromptId(code: string): string | null {
+  const m = code.match(/^\s*#\s*PROMPT_ID\s*:\s*([A-Za-z0-9_\-]+)/m);
+  return m ? m[1] : null;
+}
+
 function extractExerciseId(code: string): string | null {
   const m = code.match(/^\s*#\s*EXERCISE_ID\s*:\s*([A-Za-z0-9_\-]+)/m);
   return m ? m[1] : null;
@@ -473,7 +478,19 @@ export function activate(ctx: vscode.ExtensionContext) {
         await syncGitRepo();
 
         // 2. Get prompt content
-        const promptContent = await getPromptContent(templateId);
+        const promptIdFromCell = extractPromptId(code);
+        const promptId = promptIdFromCell || cfg.get<string>('templateId', '');
+
+        // check if prompt id exists in local prompt list
+        const templates = await listLocalTemplates();
+        const promptExists = templates.some(t => t.id === promptId);
+
+        if (!promptExists) {
+          vscode.window.showErrorMessage(`Prompt ID "${promptId}" not found in the prompt repository`);
+          return;
+        }
+
+        const promptContent = await getPromptContent(promptId);
 
         // 3. Initialize analysis variable
         let analysis = '';
