@@ -9,6 +9,7 @@ import simpleGit, { SimpleGit } from 'simple-git';
 import * as tmp from 'tmp';
 
 const GIT_REPO_URL = 'https://github.com/teachnology/promptfolio.git';
+// const GIT_REPO_URL = 'https://github.com/esemsc-hz2024/promptfolio.git';
 const LOCAL_REPO_PATH = path.join(os.tmpdir(), 'promptfolio_repo');
 
 
@@ -391,6 +392,20 @@ function getCellOutput(
   return { hasOutput, output: outputText.trim(), executionError };
 }
 
+// insert markdown cell below the specified cell
+async function insertMarkdownCellBelow(notebook: vscode.NotebookDocument, cellIndex: number, content: string) {
+  const edit = new vscode.WorkspaceEdit();
+  const newCell = new vscode.NotebookCellData(
+    vscode.NotebookCellKind.Markup,
+    content,
+    'markdown'
+  );
+  // insert at cellIndex+1
+  const notebookEdit = vscode.NotebookEdit.insertCells(cellIndex + 1, [newCell]);
+  edit.set(notebook.uri, [notebookEdit]);
+  await vscode.workspace.applyEdit(edit);
+}
+
 export function activate(ctx: vscode.ExtensionContext) {
   const provider: vscode.NotebookCellStatusBarItemProvider = {
     provideCellStatusBarItems(cell) {
@@ -559,7 +574,8 @@ export function activate(ctx: vscode.ExtensionContext) {
         
         // Add analysis to prompt only if useHiddenTests is enabled and analysis exists
         if (useHiddenTests && analysis) {
-          prompt += `\n\n# Hidden Test Results\n\`\`\`\n${analysis}\n\`\`\``;
+          // prompt += `\n\n# Hidden Test Results\n\`\`\`\n${analysis}\n\`\`\``;
+          prompt = prompt.replace('{{hidden_tests}}', analysis);
         }
         
         // console.log("prompt:", prompt)
@@ -640,29 +656,10 @@ export function activate(ctx: vscode.ExtensionContext) {
           return vscode.window.showErrorMessage(errorMessage);
         }
 
-        // Insert an empty Markdown cell
-        await vscode.commands.executeCommand('notebook.cell.insertMarkdownCellBelow');
-
-        // Find the newly inserted cell
-        const newCell = editor.notebook.cellAt(cell.index + 1);
-        if (!newCell) {
-          vscode.window.showErrorMessage('Cannot insert Markdown cell');
-          return;
-        }
-        const doc = newCell.document;
-        
-        // Replace the cell content with WorkspaceEdit
-        const lastLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
-        const fullRange = new vscode.Range(
-          0,
-          0,
-          lastLine,
-          doc.lineAt(lastLine).text.length
-        );
-        const content = `**AI Feedback**\n\n${feedback.replace(/\n/g, '  \n')}`;
-        const edit = new vscode.WorkspaceEdit();
-        edit.replace(doc.uri, fullRange, content);
-        await vscode.workspace.applyEdit(edit);
+        const notebook = editor.notebook;
+        const cellIndex = cell.index;
+        const content = `# **AI Feedback**\n\n${feedback.replace(/\n/g, '  \n')}`;
+        await insertMarkdownCellBelow(notebook, cellIndex, content);
       }
     )
   );
