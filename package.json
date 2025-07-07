@@ -1,0 +1,122 @@
+{
+  "name": "vscode-jupyter-ai-feedback",
+  "displayName": "Jupyter AI Feedback",
+  "description": "为 .ipynb 每个 Python cell 添加 AI Feedback 按钮，发送代码并展示模型反馈。",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "activationEvents": [
+    "onNotebook:*"
+  ],
+  "main": "./out/extension.js",
+  "dependencies": {
+    "axios": "^1.5.0",
+    "simple-git": "^3.19.1",
+    "tmp": "^0.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^18.7.18",
+    "@types/tmp": "^0.2.6",
+    "@types/vscode": "^1.75.0",
+    "@vscode/test-electron": "^2.3.0",
+    "typescript": "^4.9.5"
+  },
+  "scripts": {
+    "compile": "tsc -p ."
+  },
+  "contributes": {
+    "configuration": {
+      "properties": {
+        "jupyterAiFeedback.apiUrl": {
+          "type": "string",
+          "description": "API URL for the LLM service"
+        },
+        "jupyterAiFeedback.apiKey": {
+          "type": "string",
+          "description": "API key for the LLM service"
+        },
+        "jupyterAiFeedback.modelName": {
+          "type": "string",
+          "default": "llama4:scout",
+          "description": "The model name used for AI feedback"
+        },
+        "jupyterAiFeedback.templateId": {
+          "type": "string",
+          "default": "Standard Python Feedback",
+          "description": "Template ID to use for AI feedback (fetched from GitHub repository)"
+        },
+        "jupyterAiFeedback.useHiddenTests": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to use hidden tests to enhance the prompt with test analysis"
+        },
+        "jupyterAiFeedback.errorHelperOutput": {
+          "type": "string",
+          "default": "markdown",
+          "enum": ["cellOutput", "markdown"],
+          "enumDescriptions": [
+            "Display Error Helper analysis as cell output (HTML)",
+            "Display Error Helper analysis as markdown cell below"
+          ],
+          "description": "Choose how Error Helper displays its analysis"
+        },
+        "jupyterAiFeedback.chatTemplateId": {
+          "type": "string",
+          "default": "error_chat",
+          "description": "Template ID to use for Error Helper chat conversations (fetched from GitHub repository)"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "jupyterAiFeedback.sendNotebookCell",
+        "title": "Send Notebook Cell to AI Feedback"
+      },
+      {
+        "command": "jupyterAiFeedback.errorHelper",
+        "title": "Error Helper - Get help with cell errors"
+      },
+      {
+        "command": "jupyterAiFeedback.startErrorChat",
+        "title": "Start Error Helper Chat"
+      },
+      {
+        "command": "jupyterAiFeedback.listTemplates",
+        "title": "List Available Templates"
+      },
+      {
+        "command": "jupyterAiFeedback.listExercises",
+        "title": "List Available Exercises"
+      },
+      {
+        "command": "jupyterAiFeedback.selectTemplate",
+        "title": "choose Prompt template"
+      },
+      {
+        "command": "jupyterAiFeedback.selectChatTemplate",
+        "title": "Choose Chat Template"
+      }
+    ],
+    "notebookCellStatusBarItemProviders": [
+      {
+        "viewType": "*",
+        "items": [
+          {
+            "command": "jupyterAiFeedback.errorHelper",
+            "alignment": "right",
+            "priority": 200
+          },
+          {
+            "command": "jupyterAiFeedback.sendNotebookCell",
+            "alignment": "right",
+            "priority": 100
+          }
+        ]
+      }
+    ]
+  },
+  "extensionDependencies": [
+    "ms-python.python"
+  ]
+}
