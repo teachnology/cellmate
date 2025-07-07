@@ -347,8 +347,8 @@ function generateConciseTestSummary(failedTests: any[], totalTests: number): str
 }
 
 function extractPromptId(code: string): string | null {
-  const m = code.match(/^\s*#\s*PROMPT_ID\s*:\s*([A-Za-z0-9_\-]+)/m);
-  return m ? m[1] : null;
+  const m = code.match(/^[ \t]*#\s*PROMPT_ID\s*:\s*(.+)$/m);
+  return m ? m[1].trim() : null;
 }
 
 function extractExerciseId(code: string): string | null {
