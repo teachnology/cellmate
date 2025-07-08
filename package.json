@@ -68,7 +68,15 @@
       },
       {
         "command": "jupyterAiFeedback.selectTemplate",
-        "title": "choose Prompt template"
+        "title": "Choose Prompt template"
+      },
+      {
+        "command": "jupyterAiFeedback.syncGitRepo",
+        "title": "Sync GitHub Repository"
+      },
+      {
+        "command": "jupyterAiFeedback.showPromptContent",
+        "title": "Show Prompt Content"
       }
     ],
     "notebookCellStatusBarItemProviders": [
