@@ -1125,25 +1125,13 @@ function generateConciseTestSummary(failedTests: any[], totalTests: number): str
 }
 
 function extractPromptId(code: string): string | null {
-  const m = code.match(/^\s*#\s*PROMPT_ID\s*:\s*([A-Za-z0-9_\-]+)/m);
-  return m ? m[1] : null;
+  const m = code.match(/^[ \t]*#\s*PROMPT_ID\s*:\s*(.+)$/m);
+  return m ? m[1].trim() : null;
 }
 
 function extractExerciseId(code: string): string | null {
   const m = code.match(/^\s*#\s*EXERCISE_ID\s*:\s*([A-Za-z0-9_\-]+)/m);
   return m ? m[1] : null;
-}
-
-// Helper function: Get markdown cell content above the current cell
-function getMarkdownAbove(notebook: vscode.NotebookDocument, currentIndex: number): string {
-  if (currentIndex <= 0) return '';
-  
-  const cellAbove = notebook.cellAt(currentIndex - 1);
-  if (cellAbove.kind === vscode.NotebookCellKind.Markup) {
-    return cellAbove.document.getText().trim();
-  }
-  
-  return '';
 }
 
 // ───────────────────────────────────────────────────────────
@@ -1196,7 +1184,7 @@ function getCellOutput(
             stripAnsi(errObj.stack || '');
           outputText += '[ERROR] ' + pretty + '\n';
         } catch {
-          // JSON 解析失败时退化为原始字符串
+          // Fallback to raw string if JSON parsing fails
           outputText += '[ERROR] ' + stripAnsi(raw) + '\n';
         }
         executionError = true;
@@ -1230,6 +1218,272 @@ async function insertMarkdownCellBelow(notebook: vscode.NotebookDocument, cellIn
   const notebookEdit = vscode.NotebookEdit.insertCells(cellIndex + 1, [newCell]);
   edit.set(notebook.uri, [notebookEdit]);
   await vscode.workspace.applyEdit(edit);
+}
+
+// Extract all cell prompt placeholder content, supporting <!-- prompt:key -->, # prompt:key, and multi-block sections
+function extractPromptPlaceholders(notebook: vscode.NotebookDocument, currentCellIdx: number, placeholderKeys?: Set<string>): Map<string, string> {
+  console.log('=== extractPromptPlaceholders START ===');
+  console.log('Current cell index:', currentCellIdx);
+  console.log('Total cells:', notebook.cellCount);
+  
+  const placeholderMap = new Map<string, string>();
+  const htmlCommentRe = /<!--\s*prompt:([\w\-]+)\s*-->/g;
+  const hashCommentRe = /^\s*#\s*prompt:([\w\-]+)\s*$/gm;
+  const blockStartRe = /<!--\s*prompt:([\w\-]+):start\s*-->/g;
+  const blockEndRe = /<!--\s*prompt:([\w\-]+):end\s*-->/g;
+
+  // 1. Single cell comments
+  console.log('\n--- 1. Scan single cell comments ---');
+  for (let i = 0; i < notebook.cellCount; ++i) {
+    const cell = notebook.cellAt(i);
+    const text = cell.document.getText();
+    console.log(`Cell ${i} (${cell.kind === vscode.NotebookCellKind.Markup ? 'Markdown' : 'Code'}):`, text.substring(0, 100) + (text.length > 100 ? '...' : ''));
+    
+    let match: RegExpExecArray | null;
+    // HTML comments
+    while ((match = htmlCommentRe.exec(text)) !== null) {
+      const key = match[1];
+      console.log(`  Found HTML comment: prompt:${key}`);
+      // Extract the content after the comment, not the whole cell
+      const afterComment = text.substring(match.index + match[0].length).trim();
+      placeholderMap.set(key, afterComment);
+    }
+    // Hash (#) comments
+    while ((match = hashCommentRe.exec(text)) !== null) {
+      const key = match[1];
+      console.log(`  Found hash comment: prompt:${key}`);
+      // Extract the content after the comment, not the whole cell
+      const afterComment = text.substring(match.index + match[0].length).trim();
+      placeholderMap.set(key, afterComment);
+    }
+  }
+
+  // 2. Multi-block sections (allow auto-concatenation of multiple blocks for the same key)
+  console.log('\n--- 2. Scan multi-block sections ---');
+  for (let i = 0; i < notebook.cellCount; ++i) {
+    const cell = notebook.cellAt(i);
+    const text = cell.document.getText();
+    let startMatch: RegExpExecArray | null;
+    blockStartRe.lastIndex = 0;
+    while ((startMatch = blockStartRe.exec(text)) !== null) {
+      const key = startMatch[1];
+      console.log(`  Found block start: prompt:${key}:start in cell ${i}`);
+      
+      // Find the corresponding end
+      let content = '';
+      let foundEnd = false;
+      console.log(`    Searching for end marker across cells starting from cell ${i}`);
+      for (let j = i; j < notebook.cellCount; ++j) {
+        const c = notebook.cellAt(j);
+        const t = c.document.getText();
+        console.log(`    Checking cell ${j}:`, t.substring(0, 100) + (t.length > 100 ? '...' : ''));
+        
+        if (j === i) {
+          // Content after start marker
+          const afterStart = t.split(startMatch[0])[1] || '';
+          content += afterStart + '\n';
+          console.log(`    Added start cell content:`, afterStart.substring(0, 50) + (afterStart.length > 50 ? '...' : ''));
+        } else {
+          // Check for end
+          blockEndRe.lastIndex = 0;
+          let endMatch;
+          if ((endMatch = blockEndRe.exec(t)) !== null && endMatch[1] === key) {
+            // Content before end marker
+            const beforeEnd = t.split(endMatch[0])[0] || '';
+            content += beforeEnd + '\n';
+            foundEnd = true;
+            console.log(`    Found block end: prompt:${key}:end in cell ${j}`);
+            console.log(`    Added end cell content:`, beforeEnd.substring(0, 50) + (beforeEnd.length > 50 ? '...' : ''));
+            break;
+          } else {
+            // If this cell has no end marker, add the entire cell's content
+            content += t + '\n';
+            console.log(`    Added full cell ${j} content:`, t.substring(0, 50) + (t.length > 50 ? '...' : ''));
+          }
+        }
+      }
+      if (foundEnd) {
+        // Auto-concatenate multi-block
+        const prev = placeholderMap.get(key) || '';
+        const newContent = prev + content.trim() + '\n';
+        placeholderMap.set(key, newContent);
+        console.log(`    Block content for ${key}:`, newContent.substring(0, 100) + (newContent.length > 100 ? '...' : ''));
+      } else {
+        console.log(`    Warning: No matching end for block ${key}`);
+      }
+    }
+  }
+
+  // 3. Scan special cell reference placeholders (cell:1, cell:2, ..., cell:N, cell:this, cell:-1, cell:+1)
+  console.log('\n--- 3. Scan special cell reference placeholders ---');
+  const cellRefPatterns = [
+    /prompt:\s*(cell:this)/,
+    
+    // With type filter, must appear after prompt marker
+    /prompt:\s*(cell:-?\d+:(md|cd))/, // # prompt: cell:-1:md, <!-- prompt: cell:+1:cd -->
+    /prompt:\s*(cell:\+\d+:(md|cd))/, // # prompt: cell:+1:md, <!-- prompt: cell:+2:cd -->
+    /prompt:\s*(cell:[1-9]\d*:(md|cd))/, // # prompt: cell:1:md, <!-- prompt: cell:2:cd -->
+    
+    // Without type, no colon allowed after, must appear after prompt marker
+    /prompt:\s*(cell:-?\d+(?!:))/, // # prompt: cell:-1, <!-- prompt: cell:+1 -->
+    /prompt:\s*(cell:\+\d+(?!:))/, // # prompt: cell:+1, <!-- prompt: cell:+2 -->
+    /prompt:\s*(cell:[1-9]\d*(?!:))/ // # prompt: cell:1, <!-- prompt: cell:2 -->
+  ];
+  
+  for (let i = 0; i < notebook.cellCount; ++i) {
+    const cell = notebook.cellAt(i);
+    const text = cell.document.getText();
+    
+    for (const pattern of cellRefPatterns) {
+      const matches = text.match(pattern);
+      if (matches) {
+        matches.forEach(match => {
+          // 提取 prompt: 后面的实际 key
+          const key = match.replace(/^prompt:\s*/, '');
+          // 只处理模板中出现的 key
+          if (!placeholderKeys || placeholderKeys.has(key)) {
+            console.log(`  Found cell reference: ${key} in cell ${i} (from: ${match})`);
+            // Mark the found cell reference as declared, but do not set a specific value
+            placeholderMap.set(key, '');
+          }
+        });
+      }
+    }
+  }
+
+  // 4. Record current cell index for cell:this
+  placeholderMap.set('__currentCellIdx__', String(currentCellIdx));
+  
+  console.log('\n--- Final placeholder map ---');
+  for (const [key, value] of placeholderMap.entries()) {
+    if (key !== '__currentCellIdx__') {
+      console.log(`  ${key}:`, value.substring(0, 100) + (value.length > 100 ? '...' : ''));
+    }
+  }
+  console.log('=== extractPromptPlaceholders END ===\n');
+  
+  return placeholderMap;
+}
+
+// 1. Extract all placeholder keys from the template
+function getTemplatePlaceholderKeys(template: string): Set<string> {
+  const keys = new Set<string>();
+  const regex = /\{\{([\w\-:+=]+)\}\}/g;
+  let match;
+  while ((match = regex.exec(template)) !== null) {
+    keys.add(match[1]);
+  }
+  return keys;
+}
+
+// fill the template, only replace the placeholders that are declared in the notebook
+function fillPromptTemplate(template: string, placeholderMap: Map<string, string>, notebook: vscode.NotebookDocument): string {  
+  const result = template.replace(/\{\{([\w\-:+=]+)\}\}/g, (m, key) => {
+    let cellMatch;
+    console.log(`  Processing placeholder: {{${key}}}`);
+    
+    // only replace the placeholders that are declared in the notebook
+    if (placeholderMap.has(key)) {
+      // for special cell reference placeholders, need to dynamically calculate the content
+      if (key.startsWith('cell:')) {
+        const currentIdx = Number(placeholderMap.get('__currentCellIdx__') || 0);
+        console.log(`    Processing cell reference: ${key}, current index: ${currentIdx}`);
+        // 1. 相对cell: cell:+N:md / cell:-N:cd
+        if ((cellMatch = key.match(/^cell:([+-]\d+):(md|cd)$/))) {
+          const rel = Number(cellMatch[1]);
+          const type = cellMatch[2];
+          let foundIdx = -1;
+          let count = Math.abs(rel);
+          if (rel > 0) {
+            // Search downward
+            for (let i = currentIdx + 1; i < notebook.cellCount; ++i) {
+              const cell = notebook.cellAt(i);
+              if ((type === 'md' && cell.kind === vscode.NotebookCellKind.Markup) ||
+                  (type === 'cd' && cell.kind === vscode.NotebookCellKind.Code)) {
+                count--;
+                if (count === 0) {
+                  foundIdx = i;
+                  break;
+                }
+              }
+            }
+          } else {
+            // Search upward
+            for (let i = currentIdx - 1; i >= 0; --i) {
+              const cell = notebook.cellAt(i);
+              if ((type === 'md' && cell.kind === vscode.NotebookCellKind.Markup) ||
+                  (type === 'cd' && cell.kind === vscode.NotebookCellKind.Code)) {
+                count--;
+                if (count === 0) {
+                  foundIdx = i;
+                  break;
+                }
+              }
+            }
+          }
+          if (foundIdx >= 0 && foundIdx < notebook.cellCount) {
+            const content = notebook.cellAt(foundIdx).document.getText();
+            console.log(`    Found ${type} cell at index ${foundIdx}:`, content.substring(0, 50) + (content.length > 50 ? '...' : ''));
+            return content;
+          } else {
+            console.log(`    No matching ${type} cell found for ${key}`);
+            return '';
+          }
+        }
+        // 2. 简单相对cell: cell:-1, cell:+1 (不区分类型)
+        else if ((cellMatch = key.match(/^cell:([+-]\d+)$/))) {
+          const rel = Number(cellMatch[1]);
+          const targetIdx = currentIdx + rel;
+          if (targetIdx >= 0 && targetIdx < notebook.cellCount) {
+            const content = notebook.cellAt(targetIdx).document.getText();
+            console.log(`    Found cell at index ${targetIdx}:`, content.substring(0, 50) + (content.length > 50 ? '...' : ''));
+            return content;
+          } else {
+            console.log(`    No matching cell found for ${key}`);
+            return '';
+          }
+        }
+        // 3. 绝对cell: cell:N / cell:N:md / cell:N:cd
+        else if ((cellMatch = key.match(/^cell:(\d+)(?::(md|cd))?$/))) {
+          const absIdx = Number(cellMatch[1]);
+          const type = cellMatch[2]; // 可能为 undefined
+          let foundIdx = -1, count = 0;
+          for (let i = 0; i < notebook.cellCount; ++i) {
+            const cell = notebook.cellAt(i);
+            if (!type || (type === 'md' && cell.kind === vscode.NotebookCellKind.Markup) ||
+                (type === 'cd' && cell.kind === vscode.NotebookCellKind.Code)) {
+              count++;
+              if (count === absIdx) {
+                foundIdx = i;
+                break;
+              }
+            }
+          }
+          if (foundIdx >= 0 && foundIdx < notebook.cellCount) {
+            const content = notebook.cellAt(foundIdx).document.getText();
+            console.log(`    Found cell at index ${foundIdx}:`, content.substring(0, 50) + (content.length > 50 ? '...' : ''));
+            return content;
+          } else {
+            console.log(`    No matching cell found for ${key}`);
+            return '';
+          }
+        }
+      }
+      
+      // for normal placeholders, just return the value
+      const value = placeholderMap.get(key) ?? '';
+      console.log(`    Found in placeholderMap: ${key} ->`, value.substring(0, 50) + (value.length > 50 ? '...' : ''));
+      return value;
+    }
+    
+    console.log(`    Placeholder not declared in notebook, replacing with empty string: {{${key}}}`);
+    return ''; // return empty string
+  });
+  
+  console.log('Template after replacement:', result.substring(0, 200) + (result.length > 200 ? '...' : ''));
+  console.log('=== fillPromptTemplate END ===\n');
+  
+  return result;
 }
 
 export function activate(ctx: vscode.ExtensionContext) {
@@ -1567,41 +1821,39 @@ ${feedback}
         // 5. Assemble prompt
         console.log("promptContent:", promptContent)
         console.log("analysis:", analysis)
-        let prompt = promptContent.replace('{{code}}', code);
+        let prompt = promptContent;
+        
+        // 6. Extract and fill placeholders
+        const placeholderKeys = getTemplatePlaceholderKeys(promptContent);
+        const placeholderMap = extractPromptPlaceholders(editor.notebook, cell.index, placeholderKeys);
+        
+        // Add special placeholders for backward compatibility
+        placeholderMap.set('cell', code);
         
         // Check if prompt contains placeholders before getting content
-        const hasProblemDescription = prompt.includes('{{problem_description}}');
         const hasCodeOutput = prompt.includes('{{code_output}}');
-        
-        // Only get markdown above if placeholder exists
-        if (hasProblemDescription) {
-          const markdownAbove = getMarkdownAbove(editor.notebook, cell.index);
-          if (markdownAbove) {
-            prompt = prompt.replace('{{problem_description}}', markdownAbove);
-            console.log("markdownAbove:", markdownAbove)
-          } else {
-            prompt = prompt.replace('{{problem_description}}', '');
-          }
-        }
         
         // Only get cell output if placeholder exists
         if (hasCodeOutput) {
           const cellOutput = getCellOutput(cell);
           if (cellOutput.hasOutput) {
-            prompt = prompt.replace('{{code_output}}', cellOutput.output);
+            placeholderMap.set('code_output', cellOutput.output);
             console.log("cellOutput:", cellOutput.output)
           } else {
-            prompt = prompt.replace('{{code_output}}', '');
+            placeholderMap.set('code_output', '');
           }
         }
         
         // Add analysis to prompt only if useHiddenTests is enabled and analysis exists
         if (useHiddenTests && analysis) {
-          // prompt += `\n\n# Hidden Test Results\n\`\`\`\n${analysis}\n\`\`\``;
-          prompt = prompt.replace('{{hidden_tests}}', analysis);
+          placeholderMap.set('hidden_tests', analysis);
+        } else {
+          placeholderMap.set('hidden_tests', '');
         }
         
-        // console.log("prompt:", prompt)
+        // Fill only declared placeholders, keep others unchanged
+        prompt = fillPromptTemplate(prompt, placeholderMap, editor.notebook);
+        // console.log("Final prompt after filling placeholders:", prompt);
         
         // Add system role to the beginning of the prompt
         const system_role = "You are a Python teaching assistant for programming beginners. Given the uploaded code and optional hidden test results, offer concise code suggestions on improvement and fixing output errors without directly giving solutions. Be encouraging and constructive in your feedback. ";
@@ -1640,6 +1892,7 @@ ${feedback}
           console.log('Model Name:', modelName);
           console.log('Is OpenAI Endpoint:', isOpenAIEndpoint);
           console.log('Request Body:', JSON.stringify(body, null, 2));
+
           console.log('=== End API Request Debug ===');
           
           const resp = await axios.post(
@@ -1656,7 +1909,7 @@ ${feedback}
           
           console.log('=== API Response Debug ===');
           console.log('Response Status:', resp.status);
-          console.log('Response Data:', resp.data);
+          // console.log('Response Data:', resp.data);
           console.log('Response Headers:', resp.headers);
           console.log('=== End API Response Debug ===');
           
@@ -1816,6 +2069,57 @@ ${feedback}
           await vscode.workspace.getConfiguration('jupyterAiFeedback')
             .update('chatTemplateId', pick.label, vscode.ConfigurationTarget.Global);
           vscode.window.showInformationMessage(`Selected chat template: ${pick.label}`);
+          
+  // Sync GitHub repository command
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand(
+      'jupyterAiFeedback.syncGitRepo',
+      async () => {
+        try {
+          vscode.window.showInformationMessage('Syncing GitHub repository...');
+          await syncGitRepo();
+          vscode.window.showInformationMessage('GitHub repository synced successfully!');
+        } catch (error) {
+          console.error('Sync failed:', error);
+          vscode.window.showErrorMessage(`Failed to sync repository: ${error}`);
+        }
+      }
+    )
+  );
+
+  // Show prompt content command
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand(
+      'jupyterAiFeedback.showPromptContent',
+      async () => {
+        try {
+          await syncGitRepo();
+          const templates = await listLocalTemplates();
+          if (templates.length === 0) {
+            vscode.window.showInformationMessage('No available templates');
+            return;
+          }
+          
+          // 生成下拉选项
+          const items = templates.map(t => ({
+            label: t.id,
+            description: t.filename
+          }));
+          const pick = await vscode.window.showQuickPick(items, {
+            placeHolder: 'Please select a prompt to view'
+          });
+          
+          if (pick) {
+            const promptContent = await getPromptContent(pick.label);
+            const output = vscode.window.createOutputChannel(`Prompt: ${pick.label}`);
+            output.show();
+            output.appendLine(`Prompt ID: ${pick.label}`);
+            output.appendLine('='.repeat(50));
+            output.appendLine(promptContent);
+          }
+        } catch (error) {
+          console.error('Show prompt content failed:', error);
+          vscode.window.showErrorMessage(`Failed to show prompt content: ${error}`);
         }
       }
     )
