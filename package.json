@@ -50,6 +50,21 @@
           "type": "boolean",
           "default": true,
           "description": "Whether to use hidden tests to enhance the prompt with test analysis"
+        },
+        "jupyterAiFeedback.errorHelperOutput": {
+          "type": "string",
+          "default": "markdown",
+          "enum": ["cellOutput", "markdown"],
+          "enumDescriptions": [
+            "Display Error Helper analysis as cell output (HTML)",
+            "Display Error Helper analysis as markdown cell below"
+          ],
+          "description": "Choose how Error Helper displays its analysis"
+        },
+        "jupyterAiFeedback.chatTemplateId": {
+          "type": "string",
+          "default": "error_chat",
+          "description": "Template ID to use for Error Helper chat conversations (fetched from GitHub repository)"
         }
       }
     },
@@ -57,6 +72,14 @@
       {
         "command": "jupyterAiFeedback.sendNotebookCell",
         "title": "Send Notebook Cell to AI Feedback"
+      },
+      {
+        "command": "jupyterAiFeedback.errorHelper",
+        "title": "Error Helper - Get help with cell errors"
+      },
+      {
+        "command": "jupyterAiFeedback.startErrorChat",
+        "title": "Start Error Helper Chat"
       },
       {
         "command": "jupyterAiFeedback.listTemplates",
@@ -68,7 +91,11 @@
       },
       {
         "command": "jupyterAiFeedback.selectTemplate",
-        "title": "Choose Prompt template"
+        "title": "choose Prompt template"
+      },
+      {
+        "command": "jupyterAiFeedback.selectChatTemplate",
+        "title": "Choose Chat Template"
       },
       {
         "command": "jupyterAiFeedback.syncGitRepo",
@@ -83,6 +110,11 @@
       {
         "viewType": "*",
         "items": [
+          {
+            "command": "jupyterAiFeedback.errorHelper",
+            "alignment": "right",
+            "priority": 200
+          },
           {
             "command": "jupyterAiFeedback.sendNotebookCell",
             "alignment": "right",
