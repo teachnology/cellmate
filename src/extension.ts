@@ -41,11 +41,6 @@ async function syncGitRepo(): Promise<void> {
   }
 }
 
-// async function syncGitRepo(): Promise<void> {
-//   await fs.promises.rm(LOCAL_REPO_PATH, { recursive: true, force: true }).catch(()=>{});
-//   await simpleGit().clone(GIT_REPO_URL, LOCAL_REPO_PATH, ['--depth','1']);
-// }
-
 async function getPromptContent(promptId: string): Promise<string> {
   const promptPath = path.join(LOCAL_REPO_PATH, 'prompts', `${promptId}.txt`);
   if (!fs.existsSync(promptPath)) throw new Error(`Prompt file ${promptId}.txt not found`);
@@ -411,7 +406,7 @@ function getCellOutput(
             stripAnsi(errObj.stack || '');
           outputText += '[ERROR] ' + pretty + '\n';
         } catch {
-          // JSON 解析失败时退化为原始字符串
+          // Fallback to raw string if JSON parsing fails
           outputText += '[ERROR] ' + stripAnsi(raw) + '\n';
         }
         executionError = true;
@@ -447,7 +442,7 @@ async function insertMarkdownCellBelow(notebook: vscode.NotebookDocument, cellIn
   await vscode.workspace.applyEdit(edit);
 }
 
-// 提取所有 cell 的 prompt 占位符内容，支持 <!-- prompt:key -->、# prompt:key、以及多段区块
+// Extract all cell prompt placeholder content, supporting <!-- prompt:key -->, # prompt:key, and multi-block sections
 function extractPromptPlaceholders(notebook: vscode.NotebookDocument, currentCellIdx: number, placeholderKeys?: Set<string>): Map<string, string> {
   console.log('=== extractPromptPlaceholders START ===');
   console.log('Current cell index:', currentCellIdx);
@@ -459,7 +454,7 @@ function extractPromptPlaceholders(notebook: vscode.NotebookDocument, currentCel
   const blockStartRe = /<!--\s*prompt:([\w\-]+):start\s*-->/g;
   const blockEndRe = /<!--\s*prompt:([\w\-]+):end\s*-->/g;
 
-  // 1. 单 cell 注释
+  // 1. Single cell comments
   console.log('\n--- 1. Scan single cell comments ---');
   for (let i = 0; i < notebook.cellCount; ++i) {
     const cell = notebook.cellAt(i);
@@ -467,19 +462,19 @@ function extractPromptPlaceholders(notebook: vscode.NotebookDocument, currentCel
     console.log(`Cell ${i} (${cell.kind === vscode.NotebookCellKind.Markup ? 'Markdown' : 'Code'}):`, text.substring(0, 100) + (text.length > 100 ? '...' : ''));
     
     let match: RegExpExecArray | null;
-    // HTML 注释
+    // HTML comments
     while ((match = htmlCommentRe.exec(text)) !== null) {
       const key = match[1];
       console.log(`  Found HTML comment: prompt:${key}`);
-      // 提取注释后面的内容，而不是整个 cell
+      // Extract the content after the comment, not the whole cell
       const afterComment = text.substring(match.index + match[0].length).trim();
       placeholderMap.set(key, afterComment);
     }
-    // # 注释
+    // Hash (#) comments
     while ((match = hashCommentRe.exec(text)) !== null) {
       const key = match[1];
       console.log(`  Found hash comment: prompt:${key}`);
-      // 提取注释后面的内容，而不是整个 cell
+      // Extract the content after the comment, not the whole cell
       const afterComment = text.substring(match.index + match[0].length).trim();
       placeholderMap.set(key, afterComment);
     }
@@ -546,12 +541,12 @@ function extractPromptPlaceholders(notebook: vscode.NotebookDocument, currentCel
   const cellRefPatterns = [
     /prompt:\s*(cell:this)/,
     
-    // 带类型过滤，必须出现在 prompt 标记后面
+    // With type filter, must appear after prompt marker
     /prompt:\s*(cell:-?\d+:(md|cd))/, // # prompt: cell:-1:md, <!-- prompt: cell:+1:cd -->
     /prompt:\s*(cell:\+\d+:(md|cd))/, // # prompt: cell:+1:md, <!-- prompt: cell:+2:cd -->
     /prompt:\s*(cell:[1-9]\d*:(md|cd))/, // # prompt: cell:1:md, <!-- prompt: cell:2:cd -->
     
-    // 不带类型，后面禁止再出现冒号，必须出现在 prompt 标记后面
+    // Without type, no colon allowed after, must appear after prompt marker
     /prompt:\s*(cell:-?\d+(?!:))/, // # prompt: cell:-1, <!-- prompt: cell:+1 -->
     /prompt:\s*(cell:\+\d+(?!:))/, // # prompt: cell:+1, <!-- prompt: cell:+2 -->
     /prompt:\s*(cell:[1-9]\d*(?!:))/ // # prompt: cell:1, <!-- prompt: cell:2 -->
@@ -592,7 +587,7 @@ function extractPromptPlaceholders(notebook: vscode.NotebookDocument, currentCel
   return placeholderMap;
 }
 
-// 1. 提取模板中的所有占位符 key
+// 1. Extract all placeholder keys from the template
 function getTemplatePlaceholderKeys(template: string): Set<string> {
   const keys = new Set<string>();
   const regex = /\{\{([\w\-:+=]+)\}\}/g;
@@ -890,19 +885,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         placeholderMap.set('cell', code);
         
         // Check if prompt contains placeholders before getting content
-        const hasProblemDescription = prompt.includes('{{problem_description}}');
         const hasCodeOutput = prompt.includes('{{code_output}}');
-        
-        // Only get markdown above if placeholder exists and not already set by comments
-        // if (hasProblemDescription && !placeholderMap.has('problem_description')) {
-        //   const markdownAbove = getMarkdownAbove(editor.notebook, cell.index);
-        //   if (markdownAbove) {
-        //     placeholderMap.set('problem_description', markdownAbove);
-        //     console.log("markdownAbove:", markdownAbove)
-        //   } else {
-        //     placeholderMap.set('problem_description', '');
-        //   }
-        // }
         
         // Only get cell output if placeholder exists
         if (hasCodeOutput) {
