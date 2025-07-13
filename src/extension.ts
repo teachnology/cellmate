@@ -2069,7 +2069,11 @@ ${feedback}
           await vscode.workspace.getConfiguration('jupyterAiFeedback')
             .update('chatTemplateId', pick.label, vscode.ConfigurationTarget.Global);
           vscode.window.showInformationMessage(`Selected chat template: ${pick.label}`);
-          
+        }
+      }
+    )
+  );
+
   // Sync GitHub repository command
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
