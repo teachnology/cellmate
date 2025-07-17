@@ -866,6 +866,9 @@ export function activate(ctx: vscode.ExtensionContext) {
                 });
                 analysis += `\n`;
               }
+            } else if (total === 0) {
+              // if no tests are run, it means there is a code execution or syntax error
+              analysis += `Hidden tests could not be run due to a code execution or syntax error.\n`;
             } else {
               analysis += `## Test Results\n`;
               analysis += `- All ${total} tests passed! ✅\n\n`;
