@@ -204,6 +204,7 @@ function extractErrorMessage(test: any): string {
 function extractExpectedValue(errorMessage: string): string {
   const patterns = [
     /should return (\d+)/i,      // "should return 5"
+    /should be (\d+)/i,          // "should be 5"
     /expected (\d+)/i,           // "expected 5"
     /assert \d+ == (\d+)/i,      // "assert 0 == 5"
     /Expected:\s*(\d+)/i,        // "Expected: 5"
@@ -246,31 +247,9 @@ function extractActualValue(errorMessage: string): string {
 function generateSuggestions(failedTests: any[], metadata: any): string[] {
   const suggestions = new Set<string>();
   
-  for (const test of failedTests) {
-    const errorMessage = extractErrorMessage(test);
-    
-    if (errorMessage.includes('NotImplementedError')) {
-      suggestions.add('Please ensure the required function is defined');
-    } else if (errorMessage.includes('TypeError')) {
-      suggestions.add('Please check function parameter types and count');
-    } else if (errorMessage.includes('RecursionError')) {
-      suggestions.add('Recursion depth too large, consider using iteration');
-    } else if (errorMessage.includes('AssertionError')) {
-      suggestions.add('Please check if the function return value is correct');
-    } else if (errorMessage.includes('NameError')) {
-      suggestions.add('Please check if the function name is correct');
-    } else if (errorMessage.includes('IndentationError')) {
-      suggestions.add('Please check if the code indentation is correct');
-    } else if (errorMessage.includes('SyntaxError')) {
-      suggestions.add('Please check if the code syntax is correct');
-    } else if (errorMessage.toLowerCase().includes('timeout')) {
-      suggestions.add('Code execution timeout, possible infinite loop');
-    }
-  }
-  
   // Add hints from metadata
   const hints = metadata?.hints || [];
-  hints.slice(0, 2).forEach((hint: string) => suggestions.add(hint));
+  hints.slice(0, 3).forEach((hint: string) => suggestions.add(hint));
   
   return Array.from(suggestions);
 }
@@ -283,22 +262,28 @@ function generateSuggestions(failedTests: any[], metadata: any): string[] {
  *   - If not found, fallback to the first line
  */
 function extractAssertionLine(test: any): string {
-  const { longrepr } = test.call ?? test;
-  if (longrepr && typeof longrepr === 'object') {
-    // ① reprcrash.message (most concise)
-    if (longrepr.reprcrash?.message) return longrepr.reprcrash.message.trim();
-    if (typeof longrepr.longrepr === 'string') {
-      const found = longrepr.longrepr.split('\n').find((l: string) => l.trim());
-      if (found) return found.trim();
-    }
+  const longreprObj = test.call?.longrepr ?? test.longrepr ?? '';
+
+  // ---- case ① longrepr 是对象（pytest-json-report ≥ 3） ----
+  if (typeof longreprObj === 'object' && longreprObj) {
+    const msg = longreprObj.reprcrash?.message;
+    if (msg) return msg.trim();
+
+    const lrText: string = longreprObj.longrepr ?? '';
+    const runtime = lrText.split('\n').find(l => /AssertionError:/i.test(l));
+    if (runtime) return runtime.trim();
+
+    const src = lrText.split('\n').find(l => /\bassert\b/.test(l));
+    return (src ?? lrText.split('\n')[0] ?? '').trim();
   }
-  // fallback: scan error message lines
-  const raw = extractErrorMessage(test);
-  const best = raw
-    .split('\n')
-    .map((l: string) => l.trim())
-    .find((l: string) => /AssertionError|assert/i.test(l));
-  return best || raw.split('\n')[0].trim();
+
+  // ---- case ② longrepr 是字符串 ----
+  const lines = (longreprObj as string).split('\n');
+  const runtime = lines.find(l => /AssertionError:/i.test(l));
+  if (runtime) return runtime.trim();
+
+  const src = lines.find(l => /\bassert\b/.test(l));
+  return (src ?? lines[0] ?? '').trim();
 }
 
 // Helper function: Generate concise test summary
@@ -317,6 +302,7 @@ function generateConciseTestSummary(failedTests: any[], totalTests: number): str
   for (const test of failedTests) {
     const testName = test.nodeid.split('::').pop() || 'Unknown Test';
     const errorMessage = extractErrorMessage(test);
+    console.log('errorMessage', errorMessage);
     const expectedValue = extractExpectedValue(errorMessage) || '—';
     const actualValue = extractActualValue(errorMessage) || '—';
     // Try to extract input parameter from test name or error message
