@@ -1,6 +1,54 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import { existsSync } from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import * as cp from 'child_process';
 import axios from 'axios';
-import {marked} from 'marked';
+import simpleGit, { SimpleGit } from 'simple-git';
+import * as tmp from 'tmp';
+
+
+//const GIT_REPO_URL = 'https://github.com/teachnology/promptfolio.git';
+const GIT_REPO_URL = 'https://github.com/esemsc-hl524/promptfolio.git';
+const LOCAL_REPO_PATH = path.join(os.tmpdir(), 'promptfolio_repo');
+
+
+async function isValidRepo(dir: string): Promise<boolean> {
+  const git: SimpleGit = simpleGit(dir);
+  try {
+    await git.revparse(['--is-inside-work-tree']);
+    return true;                      // normal git package
+  } catch {
+    return false;                     // rev-parse fail => not valid
+  }
+}
+
+async function syncGitRepo(): Promise<void> {
+  const repoOk = existsSync(LOCAL_REPO_PATH) && await isValidRepo(LOCAL_REPO_PATH);
+
+  if (!repoOk) {
+    await fs.promises.rm(LOCAL_REPO_PATH, { recursive: true, force: true }).catch(() => {});
+    await simpleGit().clone(GIT_REPO_URL, LOCAL_REPO_PATH, ['--depth', '1']);
+    return;
+  }
+
+  try {
+    await simpleGit(LOCAL_REPO_PATH).pull();
+  } catch (err) {
+    console.warn('pull failed, re-clone:', err);
+    await fs.promises.rm(LOCAL_REPO_PATH, { recursive: true, force: true });
+    await simpleGit().clone(GIT_REPO_URL, LOCAL_REPO_PATH, ['--depth', '1']);
+  }
+}
+
+async function getPromptContent(promptId: string): Promise<string> {
+  const promptPath = path.join(LOCAL_REPO_PATH, 'prompts', `${promptId}.txt`);
+  if (!fs.existsSync(promptPath)) throw new Error(`Prompt file ${promptId}.txt not found`);
+  return fs.readFileSync(promptPath, 'utf8');
+}
+
+
 
 export function activate(ctx: vscode.ExtensionContext) {
   const provider: vscode.NotebookCellStatusBarItemProvider = {
@@ -21,19 +69,28 @@ export function activate(ctx: vscode.ExtensionContext) {
       items.push(item);
     }
 
+      const text = cell.document.getText().toLowerCase()
       if(cell.kind === vscode.NotebookCellKind.Markup &&
-  /\*\*feedback\*\*/i.test(cell.document.getText())){
+   (text.includes('**feedback**') || text.includes('**🤖feedback expansion**'))){
+        const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+        const mode = cfg.get<string>('feedbackMode');
+
+        const label =
+          mode === 'Expand'
+            ? '📖 ➤ Expand | Explain'
+            : '📖 Expand | ➤ Explain';
+        
         const markdownItem = new vscode.NotebookCellStatusBarItem(
-        '📖 Explain',
+        label,
         vscode.NotebookCellStatusBarAlignment.Right
         );
         markdownItem.command = {
           command : 'jupyterAiFeedback.explainMarkdownCell',
-          title: 'Explain Feedback Markdown',
+          title: 'Expand or Explain Feedback Markdown',
           arguments:[cell]
         }
         markdownItem.priority = 100;
-        markdownItem.tooltip = 'Use AI to explain the feedback'
+        markdownItem.tooltip = `Use AI to ${mode} the feedback`
         items.push(markdownItem)
       }
       return items;
@@ -138,17 +195,20 @@ export function activate(ctx: vscode.ExtensionContext) {
         }
 
         const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+        const mode = cfg.get<string>('feedbackMode');
         const apiUrl = cfg.get<string>('apiUrl') || '';
         const apiKey = cfg.get<string>('apiKey') || '';
-        const promptTpl = cfg.get<string>('promptTemplateMarkdown') || 'Explain the following content:\n\n{{content}}';
-        
-        if (!apiUrl || !apiKey || !promptTpl) {
+        if (!apiUrl || !apiKey || !mode) {
           return vscode.window.showErrorMessage(
-            'Please set apiUrl, apiKey and promptTemplateMarkdown'
+            'Please set apiUrl, apiKey and feedbackMode in your settings'
           );
         }
 
+        await syncGitRepo()
+        const promptTpl = await getPromptContent(mode);
+
         const prompt = promptTpl.replace('{{content}}', content);
+        const title = mode === 'Expand' ? 'Feedback Expansion' : 'Explanation';
 
         const body = {
           model : 'gemma3:27b',
@@ -163,7 +223,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         if (
           nextIndex < editor.notebook.cellCount &&
           editor.notebook.cellAt(nextIndex).kind === vscode.NotebookCellKind.Markup &&
-          editor.notebook.cellAt(nextIndex).document.getText().startsWith('**🤖Explanation**')
+          editor.notebook.cellAt(nextIndex).document.getText().startsWith(`**🤖${title}**`)
         ) {
           newCell = editor.notebook.cellAt(nextIndex);
         } else {
@@ -176,7 +236,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         const initRange = doc.lineCount === 0
           ? new vscode.Range(0,0,0,0)
           : new vscode.Range(0,0,doc.lineCount-1,doc.lineAt(doc.lineCount - 1).text.length);
-        initEdit.replace(doc.uri, initRange, '**🤖Explanation (Generating...)**\n\n')
+        initEdit.replace(doc.uri, initRange, `**🤖${title} (Generating...)**\n\n`)
         await vscode.workspace.applyEdit(initEdit);
 
         // 
@@ -197,7 +257,7 @@ export function activate(ctx: vscode.ExtensionContext) {
               const delta = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
               accumulated += delta;
               const currentText = newCell.document.getText();
-              const updated = `**🤖Explanation (Generating...)**\n\n${accumulated.replace(/\n/g, '  \n')}`;
+              const updated = `**🤖${title} (Generating...)**\n\n${accumulated.replace(/\n/g, '  \n')}`;
               const lastLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
               const updateRange = new vscode.Range(0, 0, lastLine, doc.lineAt(lastLine).text.length);
               const edit = new vscode.WorkspaceEdit();
@@ -207,7 +267,7 @@ export function activate(ctx: vscode.ExtensionContext) {
           }
 
           // give a sign that it is finished generating
-          const finalContent = `**🤖Explanation**\n\n${accumulated.replace(/\n/g, '  \n')}\n\n**✅ AI Generation Completed**`;
+          const finalContent = `**🤖${title}**\n\n${accumulated.replace(/\n/g, '  \n')}\n\n**✅ AI Generation Completed**`;
           const finalLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
           const finalRange = new vscode.Range(0, 0, finalLine, doc.lineAt(finalLine).text.length);
           const finalEdit = new vscode.WorkspaceEdit();
@@ -226,145 +286,189 @@ export function activate(ctx: vscode.ExtensionContext) {
     )
   );
 
-  // follow-up quesiton
 
-//   ctx.subscriptions.push(
-//     vscode.commands.registerCommand('jupyterAiFeedback.askFollowUpFromButton', async () => {
-//       console.log('[FollowUp] Link command triggered!');
+// follow up question button
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand('jupyterAiFeedback.askFollowUpFromButton', async (cell: vscode.NotebookCell) => {
+      const editor = vscode.window.activeNotebookEditor;
+      if (!editor) {
+        return vscode.window.showErrorMessage('No active notebook editor');
+      }
 
-//       const editor = vscode.window.activeNotebookEditor;
-//       if (!editor) {
-//         return vscode.window.showErrorMessage('No active notebook editor');
-//       }
+      const explanation = cell.document.getText()
+      const conversation: { role: 'user' | 'assistant' | 'followup'; content: string }[] = [
+        {role:'assistant', content:explanation}
+      ];
 
-//       const followUp = await vscode.window.showInputBox({
-//         prompt:  'Ask a follow-up question based on the explanation above',
-//         placeHolder: 'e.g., Can you clarify the last part?'
-//       });
+      let followupPrompt = '';
+      try{
+        followupPrompt = await getPromptContent('Followup');
+        conversation.push({role:'followup', content:followupPrompt});
+      } catch(e:any){
+        vscode.window.showErrorMessage('⚠️ Failed to load Followup prompt: ' + e.message);
+      }
 
-//       if (!followUp) {
-//         return;
-//       }
+      conversation.push({role:'assistant', content:explanation});
 
-//       // setting
-//       const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
-//       const apiUrl = cfg.get<string>('apiUrl') || '';
-//       const apiKey = cfg.get<string>('apiKey') || '';
-//       const model = 'gemma3:27b';
+      const panel = vscode.window.createWebviewPanel(
+        'followUpChat',
+        'Follow-up Chat',
+        vscode.ViewColumn.Beside,
+        { enableScripts: true }
+      );
 
-//       const body = {
-//         model,
-//         prompt: followUp,
-//         stream: false
-//       };
 
-//       let result = '';
-//       try {
-//         const resp = await axios.post(apiUrl, body, {
-//           headers: {
-//             'Content-Type': 'application/json',
-//             Authorization: `Bearer ${apiKey}`
-//           }
-//         });
-
-//         console.log('[FollowUp] Raw LLM Response:', resp.data);
-
-//         result = resp.data.message?.content || resp.data.response || 'No response received';
-//       } catch (e: any) {
-//       console.error("Follow-up AI extension fail:", e);
-//       return vscode.window.showErrorMessage('Follow-up AI failed: ' + e.message);
-//     }
-
-//       //show result in webview
-//       const panel = vscode.window.createWebviewPanel(
-//         'followUpAnswer',
-//         'Follow-up Answer',
-//         vscode.ViewColumn.One,
-//         {
-//           enableScripts:true
-//         }
-//       );
-
-//       panel.webview.html = getWebviewContent(followUp, result);
-//    })
-//   );
-
-ctx.subscriptions.push(
-  vscode.commands.registerCommand('jupyterAiFeedback.askFollowUpFromButton', async () => {
-    const editor = vscode.window.activeNotebookEditor;
-    if (!editor) {
-      return vscode.window.showErrorMessage('No active notebook editor');
-    }
-
-    const conversation: { role: 'user' | 'assistant'; content: string }[] = [];
-
-    const panel = vscode.window.createWebviewPanel(
-      'followUpChat',
-      'Follow-up Chat',
-      vscode.ViewColumn.One,
-      { enableScripts: true }
-    );
-
-    function getHTML(content: string) {
+      function getHTML() {
       return `<!DOCTYPE html>
       <html lang="en">
-      <head><meta charset="UTF-8"><style>body{font-family:sans-serif;padding:1em;}textarea{width:100%;height:60px;}button{margin-top:10px;}</style></head>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body {
+            margin: 0;
+            padding: 0;
+            font-family: sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+          }
+
+          #chat {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1em;
+            background: #f4f4f4;
+          }
+
+          .message {
+            max-width: 80%;
+            margin: 0.5em 0;
+            padding: 0.75em 1em;
+            border-radius: 10px;
+            line-height: 1.4;
+          }
+
+          .user {
+            background-color: #d1e7ff;
+            align-self: flex-end;
+            text-align: right;
+          }
+
+          .assistant {
+            background-color: #ffffff;
+            align-self: flex-start;
+            border: 1px solid #ccc;
+          }
+
+          #inputArea {
+            display: flex;
+            padding: 0.5em;
+            border-top: 1px solid #ccc;
+            background: #fff;
+          }
+
+          #input {
+            flex: 1;
+            padding: 0.5em;
+            font-size: 1em;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+          }
+
+          button {
+            margin-left: 0.5em;
+            padding: 0.5em 1em;
+            font-size: 1em;
+          }
+        </style>
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+      </head>
       <body>
-        <div id="chat">${content}</div>
-        <textarea id="input" placeholder="Type your follow-up question..."></textarea>
-        <button onclick="send()">Send</button>
+        <div id="chat"></div>
+
+        <div id="inputArea">
+          <input id="input" placeholder="Type your follow-up question..." />
+          <button id="sendBtn">Send</button>
+        </div>
 
         <script>
           const vscode = acquireVsCodeApi();
-          function send() {
-            const input = document.getElementById('input');
-            vscode.postMessage({ type: 'ask', question: input.value });
-            input.value = '';
+
+          function appendMessage(role, content) {
+            const chat = document.getElementById('chat');
+            const div = document.createElement('div');
+            div.className = 'message ' + role;
+            const label = role === 'user' ? '👤 You' : '🤖 AI';
+            const rendered = role === 'assistant' ? marked.parse(content) : content;
+            div.innerHTML = '<strong>' + label + ':</strong><br>' + rendered;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
           }
-        </script>
-      </body>
-      </html>`;
-    }
 
-    panel.webview.html = getHTML('<p>💬 Ask a follow-up question...</p>');
-
-    panel.webview.onDidReceiveMessage(async (msg) => {
-      if (msg.type === 'ask') {
-        const question = msg.question;
-        conversation.push({ role: 'user', content: question });
-
-        const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
-        const apiUrl = cfg.get<string>('apiUrl') || '';
-        const apiKey = cfg.get<string>('apiKey') || '';
-
-        const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
-
-        const body = {
-          model: 'gemma3:27b',
-          prompt: fullPrompt,
-          stream: false
-        };
-
-        try {
-          const resp = await axios.post(apiUrl, body, {
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${apiKey}`
+          document.getElementById('sendBtn').addEventListener('click', () => {
+            const input = document.getElementById('input');
+            const question = input.value.trim();
+            if (question) {
+              appendMessage('user', question);
+              vscode.postMessage({ type: 'ask', question });
+              input.value = '';
             }
           });
 
-          const answer = resp.data.message?.content || resp.data.response || 'No response received';
-          conversation.push({ role: 'assistant', content: answer });
-
-          const chatHtml = conversation.map(msg => `<p><strong>${msg.role === 'user' ? '👤 You' : '🤖 AI'}:</strong> ${msg.content}</p>`).join('');
-          panel.webview.html = getHTML(chatHtml);
-        } catch (e: any) {
-          vscode.window.showErrorMessage('Failed to fetch follow-up response: ' + e.message);
+          window.addEventListener('message', event => {
+            const msg = event.data;
+            if (msg.type === 'answer') {
+              appendMessage('assistant', msg.content);
+            }
+          });
+        </script>
+      </body>
+      </html>`;
         }
-      }
-    });
-  })
-);
+
+      panel.webview.html = getHTML();
+
+      panel.webview.onDidReceiveMessage(async (msg) => {
+        if (msg.type === 'ask') {
+          const question = msg.question;
+          conversation.push({ role: 'user', content: question });
+
+          const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+          const apiUrl = cfg.get<string>('apiUrl') || '';
+          const apiKey = cfg.get<string>('apiKey') || '';
+
+          //const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
+          const fullPrompt = conversation
+            .filter(msg => msg.role !== 'followup')
+            .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
+            .join('\n') + '\nAssistant:';
+
+          const body = {
+            model: 'gemma3:27b',
+            prompt: fullPrompt,
+            stream: false
+          };
+
+          try {
+            const resp = await axios.post(apiUrl, body, {
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`
+              }
+            });
+
+            const answer = resp.data.message?.content || resp.data.response || 'No response received';
+            conversation.push({ role: 'assistant', content: answer });
+
+            // const chatHtml = buildChatHtml(conversation);
+            panel.webview.postMessage({type: 'answer', content:answer});
+          } catch (e: any) {
+            vscode.window.showErrorMessage('Failed to fetch follow-up response: ' + e.message);
+          }
+        }
+      });
+    })
+  );
 
   ctx.subscriptions.push(
     vscode.notebooks.registerNotebookCellStatusBarItemProvider('jupyter-notebook', {
@@ -390,97 +494,8 @@ ctx.subscriptions.push(
 );
 
 
-//   ctx.subscriptions.push(
-//   vscode.commands.registerCommand('jupyterAiFeedback.explainActiveMarkdownCell', async () => {
-//     const editor = vscode.window.activeNotebookEditor;
-//     if (!editor) {
-//       return vscode.window.showErrorMessage('No active notebook editor');
-//     }
-
-//     const activeCell = editor.selections?.[0];
-//     if (!activeCell) {
-//       return vscode.window.showErrorMessage('No selected cell');
-//     }
-
-//     const cell = editor.notebook.cellAt(activeCell.start);
-//     if (cell.kind !== vscode.NotebookCellKind.Markup) {
-//       return vscode.window.showWarningMessage('Current cell is not a markdown cell.');
-//     }
-
-//     const content = cell.document.getText().toLowerCase();
-//     if (!content.includes('feedback')) {
-//       return vscode.window.showWarningMessage('This markdown cell does not appear to contain feedback.');
-//     }
-
-//     const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
-//     const apiUrl = cfg.get<string>('apiUrl') || '';
-//     const apiKey = cfg.get<string>('apiKey') || '';
-//     const promptTpl = cfg.get<string>('promptTemplateMarkdown') || 'Explain the following content:\n\n{{content}}';
-//     if (!apiUrl || !apiKey || !promptTpl) {
-//       return vscode.window.showErrorMessage('Please set apiUrl, apiKey and promptTemplateMarkdown');
-//     }
-
-//     const prompt = promptTpl.replace('{{content}}', content);
-
-//     const body = {
-//       model: 'gemma3:27b',
-//       messages: [{ role: 'user', content: prompt }]
-//     };
-
-//     let result;
-//     try {
-//       const resp = await axios.post(apiUrl, body, {
-//         headers: {
-//           'content-Type': 'application/json',
-//           Authorization: `Bearer ${apiKey}`
-//         }
-//       });
-      
-//       result = resp.data.choices[0].message.content;
-//     } catch (e: any) {
-      
-//       return vscode.window.showErrorMessage('AI explain failed: ' + e.message);
-//     }
-
-//     await vscode.commands.executeCommand('notebook.cell.insertMarkdownCellBelow');
-//     const newCell = editor.notebook.cellAt(cell.index + 1);
-//     const doc = newCell.document;
-//     const lastLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
-//     const fullRange = new vscode.Range(0, 0, lastLine, doc.lineAt(lastLine).text.length);
-//     const contentToInsert = `**AI Explanation**\n\n${result.replace(/\n/g, '  \n')}`;
-//     const edit = new vscode.WorkspaceEdit();
-//     edit.replace(doc.uri, fullRange, contentToInsert);
-//     await vscode.workspace.applyEdit(edit);
-//   })
-// );
-
 }
 
-function getWebviewContent(question: string, answer: string): string {
-  const htmlAnswer = marked(answer);  // ✅ 把 markdown 转成 HTML
-
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <style>
-        body { font-family: sans-serif; padding: 20px; }
-        .question { font-weight: bold; margin-bottom: 1em; }
-        .answer { color: #333; }
-        h2, h3, h4 { color: #007acc; }
-        ul { margin-left: 1.5em; }
-        code { background: #eee; padding: 2px 4px; border-radius: 4px; }
-      </style>
-    </head>
-    <body>
-      <h2>💬 Follow-up Answer</h2>
-      <div class="question">Q: ${question}</div>
-      <div class="answer">A:${htmlAnswer}</div>
-    </body>
-    </html>
-  `;
-}
 
 
 
