@@ -1,0 +1,140 @@
+{
+  "name": "vscode-jupyter-ai-feedback",
+  "publisher": "cellmate-team",
+  "displayName": "Jupyter AI Feedback",
+  "description": "为 .ipynb 每个 Python cell 添加 AI Feedback 按钮，发送代码并展示模型反馈。",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "activationEvents": [
+    "onNotebook:*"
+  ],
+  "main": "./out/extension.js",
+  "dependencies": {
+    "@azure/core-auth": "^1.9.0",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "axios": "^1.5.0",
+    "extract-zip": "^2.0.1",
+    "get-port": "^7.1.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.44.1",
+    "node-record-lpcm16": "^1.0.1"
+  },
+  "devDependencies": {
+    "@types/extract-zip": "^2.0.0",
+    "@types/node": "^18.19.115",
+    "@types/vscode": "^1.75.0",
+    "@vscode/test-electron": "^2.3.0",
+    "typescript": "^4.9.5"
+  },
+  "scripts": {
+    "compile": "tsc -p ."
+  },
+  "contributes": {
+    "configuration": [
+      {
+        "title": "Jupyter AI Feedback • General",
+        "properties": {
+          "jupyterAiFeedback.apiKey": {
+            "type": "string",
+            "description": "LLM feedback API key",
+            "order": 0
+          },
+          "jupyterAiFeedback.apiUrl": {
+            "type": "string",
+            "description": "LLM feedback API URL",
+            "order": 1
+          },
+          "jupyterAiFeedback.promptTemplate": {
+            "type": "string",
+            "description": "Prompt template with {{code}}",
+            "order": 2
+          }
+        }
+      },
+      {
+        "title": "Jupyter AI Feedback • Speech-to-Text",
+        "properties": {
+          "jupyterAiFeedback.speechProvider": {
+            "type": "string",
+            "default": "local",
+            "enum": [
+              "local",
+              "openai",
+              "azure"
+            ],
+            "description": "Speech engine: offline *local* model (default) or cloud providers.",
+            "order": 3
+          },
+          "jupyterAiFeedback.speechLocal.language": {
+            "type": "string",
+            "default": "en",
+            "description": "Language hint for the local model (ISO-639-1).",
+            "order": 4
+          },
+          "jupyterAiFeedback.speechOpenai.apiKey": {
+            "type": "string",
+            "description": "OpenAI API key (`sk-…`).",
+            "order": 5
+          },
+          "jupyterAiFeedback.speechOpenai.modelId": {
+            "type": "string",
+            "default": "whisper-1",
+            "description": "Model ID (e.g. whisper-1).",
+            "order": 6
+          },
+          "jupyterAiFeedback.speechOpenai.language": {
+            "type": "string",
+            "default": "en",
+            "description": "Language code for OpenAI.",
+            "order": 7
+          },
+          "jupyterAiFeedback.speechAzure.apiKey": {
+            "type": "string",
+            "description": "Azure Speech API key.",
+            "order": 8
+          },
+          "jupyterAiFeedback.speechAzure.region": {
+            "type": "string",
+            "default": "westeurope",
+            "description": "Azure region.",
+            "order": 9
+          },
+          "jupyterAiFeedback.speechAzure.language": {
+            "type": "string",
+            "default": "en-US",
+            "description": "Language code for Azure.",
+            "order": 10
+          }
+        }
+      }
+    ]
+  },
+  "commands": [
+    {
+      "command": "jupyterAiFeedback.sendNotebookCell",
+      "title": "Send Notebook Cell to AI Feedback"
+    },
+    {
+      "command": "jupyterAiFeedback.toggleRecording",
+      "title": "🎙️ Toggle Speech-to-Text Recording"
+    }
+  ],
+  "notebookCellStatusBarItemProviders": [
+    {
+      "viewType": "*",
+      "items": [
+        {
+          "command": "jupyterAiFeedback.sendNotebookCell",
+          "alignment": "right",
+          "priority": 100
+        },
+        {
+          "command": "jupyterAiFeedback.toggleRecording",
+          "alignment": "left",
+          "priority": 100
+        }
+      ]
+    }
+  ]
+}
