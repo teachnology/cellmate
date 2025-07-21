@@ -20,8 +20,8 @@
     "extract-zip": "^2.0.1",
     "get-port": "^7.1.0",
     "microsoft-cognitiveservices-speech-sdk": "^1.44.1",
-    "node-record-lpcm16": "^1.0.1"
-    "marked": "^16.0.0",
+    "node-record-lpcm16": "^1.0.1",
+    "marked": "^16.0.0"
   },
   "devDependencies": {
     "@types/node": "^18.7.18",
