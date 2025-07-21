@@ -12,10 +12,13 @@
   "main": "./out/extension.js",
   "dependencies": {
     "axios": "^1.5.0",
-    "marked": "^16.0.0"
+    "marked": "^16.0.0",
+    "simple-git": "^3.28.0",
+    "tmp": "^0.2.3"
   },
   "devDependencies": {
     "@types/node": "^18.7.18",
+    "@types/tmp": "^0.2.6",
     "@types/vscode": "^1.75.0",
     "@vscode/test-electron": "^2.3.0",
     "typescript": "^4.9.5"
@@ -35,8 +38,18 @@
         "jupyterAiFeedback.promptTemplate": {
           "type": "string"
         },
-        "jupyterAiFeedback.promptTemplateMark": {
-          "type": "string"
+        "jupyterAiFeedback.feedbackMode": {
+          "type": "string",
+          "default": "Expand",
+          "enum": [
+            "Expand",
+            "Explain"
+          ],
+          "enumDescriptions": [
+            "Expand the feedback for students",
+            "Explain the feedback in simpler terms"
+          ],
+          "description": "Choose how the feedback will be processed by the AI"
         }
       }
     },
@@ -48,10 +61,6 @@
       {
         "command": "jupyterAiFeedback.askFollowUpFromButton",
         "title": "Ask Follow-up Question (via Button)"
-      },
-      {
-        "command": "jupyterAiFeedback.explainActiveMarkdownCell",
-        "title": "Explain Current Markdown Cell"
       }
     ],
     "notebookCellStatusBarItemProviders": [
