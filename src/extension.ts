@@ -982,6 +982,7 @@ function extractErrorMessage(test: any): string {
 function extractExpectedValue(errorMessage: string): string {
   const patterns = [
     /should return (\d+)/i,      // "should return 5"
+    /should be (\d+)/i,          // "should be 5"
     /expected (\d+)/i,           // "expected 5"
     /assert \d+ == (\d+)/i,      // "assert 0 == 5"
     /Expected:\s*(\d+)/i,        // "Expected: 5"
@@ -1024,33 +1025,43 @@ function extractActualValue(errorMessage: string): string {
 function generateSuggestions(failedTests: any[], metadata: any): string[] {
   const suggestions = new Set<string>();
   
-  for (const test of failedTests) {
-    const errorMessage = extractErrorMessage(test);
-    
-    if (errorMessage.includes('NotImplementedError')) {
-      suggestions.add('Please ensure the required function is defined');
-    } else if (errorMessage.includes('TypeError')) {
-      suggestions.add('Please check function parameter types and count');
-    } else if (errorMessage.includes('RecursionError')) {
-      suggestions.add('Recursion depth too large, consider using iteration');
-    } else if (errorMessage.includes('AssertionError')) {
-      suggestions.add('Please check if the function return value is correct');
-    } else if (errorMessage.includes('NameError')) {
-      suggestions.add('Please check if the function name is correct');
-    } else if (errorMessage.includes('IndentationError')) {
-      suggestions.add('Please check if the code indentation is correct');
-    } else if (errorMessage.includes('SyntaxError')) {
-      suggestions.add('Please check if the code syntax is correct');
-    } else if (errorMessage.toLowerCase().includes('timeout')) {
-      suggestions.add('Code execution timeout, possible infinite loop');
-    }
-  }
-  
   // Add hints from metadata
   const hints = metadata?.hints || [];
-  hints.slice(0, 2).forEach((hint: string) => suggestions.add(hint));
+  hints.slice(0, 3).forEach((hint: string) => suggestions.add(hint));
   
   return Array.from(suggestions);
+}
+
+/**
+ * Extract the most readable assertion line from pytest-json-report's longrepr/message
+ *   - If reprcrash.message exists ⇒ use it (pytest's concise line)
+ *   - Otherwise, scan all lines in longrepr:
+ *        Prefer the line containing 'AssertionError' or 'assert'
+ *   - If not found, fallback to the first line
+ */
+function extractAssertionLine(test: any): string {
+  const longreprObj = test.call?.longrepr ?? test.longrepr ?? '';
+
+  // ---- case ① longrepr 是对象（pytest-json-report ≥ 3） ----
+  if (typeof longreprObj === 'object' && longreprObj) {
+    const msg = longreprObj.reprcrash?.message;
+    if (msg) return msg.trim();
+
+    const lrText: string = longreprObj.longrepr ?? '';
+    const runtime = lrText.split('\n').find(l => /AssertionError:/i.test(l));
+    if (runtime) return runtime.trim();
+
+    const src = lrText.split('\n').find(l => /\bassert\b/.test(l));
+    return (src ?? lrText.split('\n')[0] ?? '').trim();
+  }
+
+  // ---- case ② longrepr 是字符串 ----
+  const lines = (longreprObj as string).split('\n');
+  const runtime = lines.find(l => /AssertionError:/i.test(l));
+  if (runtime) return runtime.trim();
+
+  const src = lines.find(l => /\bassert\b/.test(l));
+  return (src ?? lines[0] ?? '').trim();
 }
 
 // Helper function: Generate concise test summary
@@ -1058,69 +1069,56 @@ function generateConciseTestSummary(failedTests: any[], totalTests: number): str
   if (failedTests.length === 0) {
     return '';
   }
-  
+
   const passed = totalTests - failedTests.length;
   const successRate = Math.round((passed / totalTests) * 100);
-  
-  // Extract test cases with expected vs actual values
+
+  // Extract test cases with expected vs actual values and assertion message
   const testCases = [];
-  
+  const seen = new Set<string>();
+
   for (const test of failedTests) {
     const testName = test.nodeid.split('::').pop() || 'Unknown Test';
     const errorMessage = extractErrorMessage(test);
-    const expectedValue = extractExpectedValue(errorMessage);
-    const actualValue = extractActualValue(errorMessage);
-    
-    // Try to extract input parameter from test name
+    console.log('errorMessage', errorMessage);
+    const expectedValue = extractExpectedValue(errorMessage) || '—';
+    const actualValue = extractActualValue(errorMessage) || '—';
+    // Try to extract input parameter from test name or error message
     let inputParam = '';
-    const inputMatch = testName.match(/\((\d+)\)/);
+    const inputMatch = errorMessage.match(/\((\-?\d+)\)/);
     if (inputMatch) {
       inputParam = inputMatch[1];
     }
-    
-    if (expectedValue && actualValue) {
-      testCases.push({
-        test: testName,
-        input: inputParam,
-        expected: expectedValue,
-        actual: actualValue
-      });
-    }
+    // Unique pattern: expected/actual/line
+    const pattern = `${expectedValue}/${actualValue}/${test.line ?? ''}`;
+    if (seen.has(pattern)) continue;
+    seen.add(pattern);
+    // Use the new assertion line extractor
+    const assertionLine = extractAssertionLine(test);
+    testCases.push({
+      test: testName,
+      input: inputParam,
+      expected: expectedValue,
+      actual: actualValue,
+      assertion: assertionLine
+    });
+    if (testCases.length === 3) break;
   }
-  
-  // Select representative cases (first 2 with different patterns)
-  const representativeCases = [];
-  const seenPatterns = new Set();
-  
-  for (const testCase of testCases) {
-    const pattern = `${testCase.expected}-${testCase.actual}`;
-    if (representativeCases.length < 2 && !seenPatterns.has(pattern)) {
-      representativeCases.push(testCase);
-      seenPatterns.add(pattern);
-    }
-  }
-  
+
   // Generate summary
   let summary = `## Test Summary\n`;
   summary += `- ${totalTests} tests, ${passed} passed, ${failedTests.length} failed (${successRate}%)\n\n`;
-  
-  if (representativeCases.length > 0) {
-    summary += `### Representative Failures\n`;
-    summary += `| Test | n | Expected | Actual |\n`;
-    summary += `|:----:|:--:|:--------:|:------:|\n`;
-    
-    for (const testCase of representativeCases) {
-      // Extract function name and parameter for cleaner display
-      const funcMatch = testCase.test.match(/^(\w+)\((\d+)\)$/);
-      if (funcMatch) {
-        summary += `| ${funcMatch[1]}(${funcMatch[2]}) | ${funcMatch[2]} | ${testCase.expected} | ${testCase.actual} |\n`;
-      } else {
-        summary += `| ${testCase.test} | ${testCase.input} | ${testCase.expected} | ${testCase.actual} |\n`;
-      }
+
+  if (testCases.length > 0) {
+    summary += `### Failure Examples\n`;
+    summary += `| Test | Input | Expected | Actual | Assertion Message |\n`;
+    summary += `|------|-------|----------|--------|-------------------|\n`;
+    for (const t of testCases) {
+      summary += `| ${t.test} | ${t.input} | ${t.expected} | ${t.actual} | ${t.assertion} |\n`;
     }
     summary += `\n`;
   }
-  
+
   return summary;
 }
 
@@ -1227,10 +1225,10 @@ function extractPromptPlaceholders(notebook: vscode.NotebookDocument, currentCel
   console.log('Total cells:', notebook.cellCount);
   
   const placeholderMap = new Map<string, string>();
-  const htmlCommentRe = /<!--\s*prompt:([\w\-]+)\s*-->/g;
-  const hashCommentRe = /^\s*#\s*prompt:([\w\-]+)\s*$/gm;
-  const blockStartRe = /<!--\s*prompt:([\w\-]+):start\s*-->/g;
-  const blockEndRe = /<!--\s*prompt:([\w\-]+):end\s*-->/g;
+  const htmlCommentRe = /<!--\s*prompt:\s*([\w\-]+)\s*-->/g;
+  const hashCommentRe = /^\s*#\s*prompt:\s*([\w\-]+)\s*$/gm;
+  const blockStartRe = /<!--\s*prompt:\s*([\w\-]+):start\s*-->/g;
+  const blockEndRe = /<!--\s*prompt:\s*([\w\-]+):end\s*-->/g;
 
   // 1. Single cell comments
   console.log('\n--- 1. Scan single cell comments ---');
@@ -1378,7 +1376,7 @@ function getTemplatePlaceholderKeys(template: string): Set<string> {
 
 // fill the template, only replace the placeholders that are declared in the notebook
 function fillPromptTemplate(template: string, placeholderMap: Map<string, string>, notebook: vscode.NotebookDocument): string {  
-  const result = template.replace(/\{\{([\w\-:+=]+)\}\}/g, (m, key) => {
+  let result = template.replace(/\{\{([\w\-:+=]+)\}\}/g, (m, key) => {
     let cellMatch;
     console.log(`  Processing placeholder: {{${key}}}`);
     
@@ -1483,6 +1481,8 @@ function fillPromptTemplate(template: string, placeholderMap: Map<string, string
   console.log('Template after replacement:', result.substring(0, 200) + (result.length > 200 ? '...' : ''));
   console.log('=== fillPromptTemplate END ===\n');
   
+  // combine multiple empty lines into one
+  result = result.replace(/([ \t]*\n){3,}/g, '\n\n');
   return result;
 }
 
@@ -1773,11 +1773,11 @@ ${feedback}
             const passed = testResult.report.tests.filter((t: any) => t.outcome === 'passed').length;
             const failed = total - passed;
             
-            analysis += `## Test Results Overview\n`;
-            analysis += `- **Total Tests:** ${total}\n`;
-            analysis += `- **Passed:** ${passed} \n`;
-            analysis += `- **Failed:** ${failed} \n`;
-            analysis += `- **Success Rate:** ${Math.round((passed / total) * 100)}%\n\n`;
+            // analysis += `## Test Results Overview\n`;
+            // analysis += `- **Total Tests:** ${total}\n`;
+            // analysis += `- **Passed:** ${passed} \n`;
+            // analysis += `- **Failed:** ${failed} \n`;
+            // analysis += `- **Success Rate:** ${Math.round((passed / total) * 100)}%\n\n`;
             
             if (failed > 0) {
               analysis += `## Failed Test Details\n\n`;
@@ -1798,6 +1798,9 @@ ${feedback}
                 });
                 analysis += `\n`;
               }
+            } else if (total === 0) {
+              // if no tests are run, it means there is a code execution or syntax error
+              analysis += `Hidden tests could not be run due to a code execution or syntax error.\n`;
             } else {
               analysis += `## Test Results\n`;
               analysis += `- All ${total} tests passed! ✅\n\n`;
