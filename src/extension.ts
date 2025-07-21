@@ -216,6 +216,10 @@ export function activate(ctx: vscode.ExtensionContext) {
           stream : true
         };
 
+        const header = `**🤖${title}**`;
+        const generatingNote = `*(Generating...)*`;
+        const finishedNote = `**✅ AI Generation Completed**`;
+
         // modify markdown cell
         let newCell: vscode.NotebookCell;
         const nextIndex = cell.index + 1;
@@ -223,7 +227,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         if (
           nextIndex < editor.notebook.cellCount &&
           editor.notebook.cellAt(nextIndex).kind === vscode.NotebookCellKind.Markup &&
-          editor.notebook.cellAt(nextIndex).document.getText().startsWith(`**🤖${title}**`)
+          editor.notebook.cellAt(nextIndex).document.getText().startsWith(header)
         ) {
           newCell = editor.notebook.cellAt(nextIndex);
         } else {
@@ -232,14 +236,8 @@ export function activate(ctx: vscode.ExtensionContext) {
         }
 
         const doc = newCell.document;
-        const initEdit = new vscode.WorkspaceEdit();
-        const initRange = doc.lineCount === 0
-          ? new vscode.Range(0,0,0,0)
-          : new vscode.Range(0,0,doc.lineCount-1,doc.lineAt(doc.lineCount - 1).text.length);
-        initEdit.replace(doc.uri, initRange, `**🤖${title} (Generating...)**\n\n`)
-        await vscode.workspace.applyEdit(initEdit);
+        await replaceCellContent(doc, `${header}\n\n${generatingNote}\n`);
 
-        // 
         try {
           const resp = await axios.post(apiUrl, body, {
             headers: {
@@ -252,30 +250,26 @@ export function activate(ctx: vscode.ExtensionContext) {
           let accumulated = '';
           for await (const chunk of resp.data) {
             const line = chunk.toString().trim();
-            const match = line.match(/\"response\":\"(.*?)\"/);
+            const match = line.match(/"response":"(.*?)"/);
             if (match) {
               const delta = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
               accumulated += delta;
-              const currentText = newCell.document.getText();
-              const updated = `**🤖${title} (Generating...)**\n\n${accumulated.replace(/\n/g, '  \n')}`;
-              const lastLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
-              const updateRange = new vscode.Range(0, 0, lastLine, doc.lineAt(lastLine).text.length);
-              const edit = new vscode.WorkspaceEdit();
-              edit.replace(doc.uri, updateRange,updated);
-              await vscode.workspace.applyEdit(edit);
+
+              const safeText = cleanMarkdown(accumulated);
+              const updatedContent = `${header}\n\n${safeText.replace(/\n/g, '  \n')}\n\n${generatingNote}`;
+              await replaceCellContent(doc,updatedContent);
             }
           }
 
           // give a sign that it is finished generating
-          const finalContent = `**🤖${title}**\n\n${accumulated.replace(/\n/g, '  \n')}\n\n**✅ AI Generation Completed**`;
-          const finalLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
-          const finalRange = new vscode.Range(0, 0, finalLine, doc.lineAt(finalLine).text.length);
-          const finalEdit = new vscode.WorkspaceEdit();
-          finalEdit.replace(doc.uri, finalRange, finalContent);
-          await vscode.workspace.applyEdit(finalEdit);
+          const finalText = cleanMarkdown(accumulated);
+          const finalContent = `${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n${finishedNote}`;
+          await replaceCellContent(doc,finalContent);
 
         } catch (e:any) {
           console.error("AI Extension fail:", e); 
+          const errorMsg = `${header}\n\n❌ AI generation failed:\n\n\`${e.message}\``;
+          await replaceCellContent(doc, errorMsg);
           return vscode.window.showErrorMessage('Ai Extension fail:' + e.message);
 
         }
@@ -286,6 +280,33 @@ export function activate(ctx: vscode.ExtensionContext) {
     )
   );
 
+  async function replaceCellContent(doc:vscode.TextDocument, content:string){
+    const edit = new vscode.WorkspaceEdit();
+    const start = new vscode.Position(0,0);
+    const end = doc.lineAt(doc.lineCount - 1).range.end;
+    const fullRange = new vscode.Range(start, end);
+    edit.replace(doc.uri, fullRange, content);
+    await vscode.workspace.applyEdit(edit);
+  }
+
+  function cleanMarkdown(text:string):string{
+    let cleaned = text;
+
+    // Complete unmatched markdown symbols
+    const count = (str: string) => (cleaned.match(new RegExp(str, 'g')) || []).length;
+    if (count('\\*\\*') % 2 !== 0) cleaned += '**';
+    if ((count('\\*') - 2 * count('\\*\\*')) % 2 !== 0) cleaned += '*';
+    if (count('`') % 2 !== 0) cleaned += '`';
+
+    // Ensure headings start on a new line
+    cleaned = cleaned.replace(/(##\\s.*?)(?=\\S)/g, '\n$1');
+
+    // Remove unnecessary backslashes
+    cleaned = cleaned.replace(/\\([a-zA-Z])/g, '$1');
+    cleaned = cleaned.replace(/\\\\n/g, '\n'); 
+
+    return cleaned.trim();
+  }
 
 // follow up question button
   ctx.subscriptions.push(
@@ -492,14 +513,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     }
   })
 );
-
-
 }
 
-
-
-
-
-// Markdown cell
   
 export function deactivate() {}

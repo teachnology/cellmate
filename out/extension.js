@@ -44,8 +44,53 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.deactivate = exports.activate = void 0;
 const vscode = __importStar(require("vscode"));
+const fs = __importStar(require("fs"));
+const fs_1 = require("fs");
+const path = __importStar(require("path"));
+const os = __importStar(require("os"));
 const axios_1 = __importDefault(require("axios"));
-const marked_1 = require("marked");
+const simple_git_1 = __importDefault(require("simple-git"));
+//const GIT_REPO_URL = 'https://github.com/teachnology/promptfolio.git';
+const GIT_REPO_URL = 'https://github.com/esemsc-hl524/promptfolio.git';
+const LOCAL_REPO_PATH = path.join(os.tmpdir(), 'promptfolio_repo');
+function isValidRepo(dir) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const git = (0, simple_git_1.default)(dir);
+        try {
+            yield git.revparse(['--is-inside-work-tree']);
+            return true; // normal git package
+        }
+        catch (_a) {
+            return false; // rev-parse fail => not valid
+        }
+    });
+}
+function syncGitRepo() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const repoOk = (0, fs_1.existsSync)(LOCAL_REPO_PATH) && (yield isValidRepo(LOCAL_REPO_PATH));
+        if (!repoOk) {
+            yield fs.promises.rm(LOCAL_REPO_PATH, { recursive: true, force: true }).catch(() => { });
+            yield (0, simple_git_1.default)().clone(GIT_REPO_URL, LOCAL_REPO_PATH, ['--depth', '1']);
+            return;
+        }
+        try {
+            yield (0, simple_git_1.default)(LOCAL_REPO_PATH).pull();
+        }
+        catch (err) {
+            console.warn('pull failed, re-clone:', err);
+            yield fs.promises.rm(LOCAL_REPO_PATH, { recursive: true, force: true });
+            yield (0, simple_git_1.default)().clone(GIT_REPO_URL, LOCAL_REPO_PATH, ['--depth', '1']);
+        }
+    });
+}
+function getPromptContent(promptId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const promptPath = path.join(LOCAL_REPO_PATH, 'prompts', `${promptId}.txt`);
+        if (!fs.existsSync(promptPath))
+            throw new Error(`Prompt file ${promptId}.txt not found`);
+        return fs.readFileSync(promptPath, 'utf8');
+    });
+}
 function activate(ctx) {
     const provider = {
         provideCellStatusBarItems(cell) {
@@ -60,16 +105,22 @@ function activate(ctx) {
                 };
                 items.push(item);
             }
+            const text = cell.document.getText().toLowerCase();
             if (cell.kind === vscode.NotebookCellKind.Markup &&
-                /\*\*feedback\*\*/i.test(cell.document.getText())) {
-                const markdownItem = new vscode.NotebookCellStatusBarItem('📖 Explain', vscode.NotebookCellStatusBarAlignment.Right);
+                (text.includes('**feedback**') || text.includes('**🤖feedback expansion**'))) {
+                const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+                const mode = cfg.get('feedbackMode');
+                const label = mode === 'Expand'
+                    ? '📖 ➤ Expand | Explain'
+                    : '📖 Expand | ➤ Explain';
+                const markdownItem = new vscode.NotebookCellStatusBarItem(label, vscode.NotebookCellStatusBarAlignment.Right);
                 markdownItem.command = {
                     command: 'jupyterAiFeedback.explainMarkdownCell',
-                    title: 'Explain Feedback Markdown',
+                    title: 'Expand or Explain Feedback Markdown',
                     arguments: [cell]
                 };
                 markdownItem.priority = 100;
-                markdownItem.tooltip = 'Use AI to explain the feedback';
+                markdownItem.tooltip = `Use AI to ${mode} the feedback`;
                 items.push(markdownItem);
             }
             return items;
@@ -146,24 +197,30 @@ function activate(ctx) {
             return;
         }
         const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+        const mode = cfg.get('feedbackMode');
         const apiUrl = cfg.get('apiUrl') || '';
         const apiKey = cfg.get('apiKey') || '';
-        const promptTpl = cfg.get('promptTemplateMarkdown') || 'Explain the following content:\n\n{{content}}';
-        if (!apiUrl || !apiKey || !promptTpl) {
-            return vscode.window.showErrorMessage('Please set apiUrl, apiKey and promptTemplateMarkdown');
+        if (!apiUrl || !apiKey || !mode) {
+            return vscode.window.showErrorMessage('Please set apiUrl, apiKey and feedbackMode in your settings');
         }
+        yield syncGitRepo();
+        const promptTpl = yield getPromptContent(mode);
         const prompt = promptTpl.replace('{{content}}', content);
+        const title = mode === 'Expand' ? 'Feedback Expansion' : 'Explanation';
         const body = {
             model: 'gemma3:27b',
             prompt: prompt,
             stream: true
         };
+        const header = `**🤖${title}**`;
+        const generatingNote = `*(Generating...)*`;
+        const finishedNote = `**✅ AI Generation Completed**`;
         // modify markdown cell
         let newCell;
         const nextIndex = cell.index + 1;
         if (nextIndex < editor.notebook.cellCount &&
             editor.notebook.cellAt(nextIndex).kind === vscode.NotebookCellKind.Markup &&
-            editor.notebook.cellAt(nextIndex).document.getText().startsWith('**🤖Explanation**')) {
+            editor.notebook.cellAt(nextIndex).document.getText().startsWith(header)) {
             newCell = editor.notebook.cellAt(nextIndex);
         }
         else {
@@ -171,13 +228,7 @@ function activate(ctx) {
             newCell = editor.notebook.cellAt(cell.index + 1);
         }
         const doc = newCell.document;
-        const initEdit = new vscode.WorkspaceEdit();
-        const initRange = doc.lineCount === 0
-            ? new vscode.Range(0, 0, 0, 0)
-            : new vscode.Range(0, 0, doc.lineCount - 1, doc.lineAt(doc.lineCount - 1).text.length);
-        initEdit.replace(doc.uri, initRange, '**🤖Explanation (Generating...)**\n\n');
-        yield vscode.workspace.applyEdit(initEdit);
-        // 
+        yield replaceCellContent(doc, `${header}\n\n${generatingNote}\n`);
         try {
             const resp = yield axios_1.default.post(apiUrl, body, {
                 headers: {
@@ -194,17 +245,13 @@ function activate(ctx) {
                     try {
                         const chunk = _c;
                         const line = chunk.toString().trim();
-                        const match = line.match(/\"response\":\"(.*?)\"/);
+                        const match = line.match(/"response":"(.*?)"/);
                         if (match) {
                             const delta = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
                             accumulated += delta;
-                            const currentText = newCell.document.getText();
-                            const updated = `**🤖Explanation (Generating...)**\n\n${accumulated.replace(/\n/g, '  \n')}`;
-                            const lastLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
-                            const updateRange = new vscode.Range(0, 0, lastLine, doc.lineAt(lastLine).text.length);
-                            const edit = new vscode.WorkspaceEdit();
-                            edit.replace(doc.uri, updateRange, updated);
-                            yield vscode.workspace.applyEdit(edit);
+                            const safeText = cleanMarkdown(accumulated);
+                            const updatedContent = `${header}\n\n${safeText.replace(/\n/g, '  \n')}\n\n${generatingNote}`;
+                            yield replaceCellContent(doc, updatedContent);
                         }
                     }
                     finally {
@@ -220,97 +267,172 @@ function activate(ctx) {
                 finally { if (e_1) throw e_1.error; }
             }
             // give a sign that it is finished generating
-            const finalContent = `**🤖Explanation**\n\n${accumulated.replace(/\n/g, '  \n')}\n\n**✅ AI Generation Completed**`;
-            const finalLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
-            const finalRange = new vscode.Range(0, 0, finalLine, doc.lineAt(finalLine).text.length);
-            const finalEdit = new vscode.WorkspaceEdit();
-            finalEdit.replace(doc.uri, finalRange, finalContent);
-            yield vscode.workspace.applyEdit(finalEdit);
+            const finalText = cleanMarkdown(accumulated);
+            const finalContent = `${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n${finishedNote}`;
+            yield replaceCellContent(doc, finalContent);
         }
         catch (e) {
             console.error("AI Extension fail:", e);
+            const errorMsg = `${header}\n\n❌ AI generation failed:\n\n\`${e.message}\``;
+            yield replaceCellContent(doc, errorMsg);
             return vscode.window.showErrorMessage('Ai Extension fail:' + e.message);
         }
     })));
-    // follow-up quesiton
-    //   ctx.subscriptions.push(
-    //     vscode.commands.registerCommand('jupyterAiFeedback.askFollowUpFromButton', async () => {
-    //       console.log('[FollowUp] Link command triggered!');
-    //       const editor = vscode.window.activeNotebookEditor;
-    //       if (!editor) {
-    //         return vscode.window.showErrorMessage('No active notebook editor');
-    //       }
-    //       const followUp = await vscode.window.showInputBox({
-    //         prompt:  'Ask a follow-up question based on the explanation above',
-    //         placeHolder: 'e.g., Can you clarify the last part?'
-    //       });
-    //       if (!followUp) {
-    //         return;
-    //       }
-    //       // setting
-    //       const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
-    //       const apiUrl = cfg.get<string>('apiUrl') || '';
-    //       const apiKey = cfg.get<string>('apiKey') || '';
-    //       const model = 'gemma3:27b';
-    //       const body = {
-    //         model,
-    //         prompt: followUp,
-    //         stream: false
-    //       };
-    //       let result = '';
-    //       try {
-    //         const resp = await axios.post(apiUrl, body, {
-    //           headers: {
-    //             'Content-Type': 'application/json',
-    //             Authorization: `Bearer ${apiKey}`
-    //           }
-    //         });
-    //         console.log('[FollowUp] Raw LLM Response:', resp.data);
-    //         result = resp.data.message?.content || resp.data.response || 'No response received';
-    //       } catch (e: any) {
-    //       console.error("Follow-up AI extension fail:", e);
-    //       return vscode.window.showErrorMessage('Follow-up AI failed: ' + e.message);
-    //     }
-    //       //show result in webview
-    //       const panel = vscode.window.createWebviewPanel(
-    //         'followUpAnswer',
-    //         'Follow-up Answer',
-    //         vscode.ViewColumn.One,
-    //         {
-    //           enableScripts:true
-    //         }
-    //       );
-    //       panel.webview.html = getWebviewContent(followUp, result);
-    //    })
-    //   );
-    ctx.subscriptions.push(vscode.commands.registerCommand('jupyterAiFeedback.askFollowUpFromButton', () => __awaiter(this, void 0, void 0, function* () {
+    function replaceCellContent(doc, content) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const edit = new vscode.WorkspaceEdit();
+            const start = new vscode.Position(0, 0);
+            const end = doc.lineAt(doc.lineCount - 1).range.end;
+            const fullRange = new vscode.Range(start, end);
+            edit.replace(doc.uri, fullRange, content);
+            yield vscode.workspace.applyEdit(edit);
+        });
+    }
+    function cleanMarkdown(text) {
+        let cleaned = text;
+        // Complete unmatched markdown symbols
+        const count = (str) => (cleaned.match(new RegExp(str, 'g')) || []).length;
+        if (count('\\*\\*') % 2 !== 0)
+            cleaned += '**';
+        if ((count('\\*') - 2 * count('\\*\\*')) % 2 !== 0)
+            cleaned += '*';
+        if (count('`') % 2 !== 0)
+            cleaned += '`';
+        // Ensure headings start on a new line
+        cleaned = cleaned.replace(/(##\\s.*?)(?=\\S)/g, '\n$1');
+        // Remove unnecessary backslashes
+        cleaned = cleaned.replace(/\\([a-zA-Z])/g, '$1');
+        cleaned = cleaned.replace(/\\\\n/g, '\n');
+        return cleaned.trim();
+    }
+    // follow up question button
+    ctx.subscriptions.push(vscode.commands.registerCommand('jupyterAiFeedback.askFollowUpFromButton', (cell) => __awaiter(this, void 0, void 0, function* () {
         const editor = vscode.window.activeNotebookEditor;
         if (!editor) {
             return vscode.window.showErrorMessage('No active notebook editor');
         }
-        const conversation = [];
-        const panel = vscode.window.createWebviewPanel('followUpChat', 'Follow-up Chat', vscode.ViewColumn.One, { enableScripts: true });
-        function getHTML(content) {
+        const explanation = cell.document.getText();
+        const conversation = [
+            { role: 'assistant', content: explanation }
+        ];
+        let followupPrompt = '';
+        try {
+            followupPrompt = yield getPromptContent('Followup');
+            conversation.push({ role: 'followup', content: followupPrompt });
+        }
+        catch (e) {
+            vscode.window.showErrorMessage('⚠️ Failed to load Followup prompt: ' + e.message);
+        }
+        conversation.push({ role: 'assistant', content: explanation });
+        const panel = vscode.window.createWebviewPanel('followUpChat', 'Follow-up Chat', vscode.ViewColumn.Beside, { enableScripts: true });
+        function getHTML() {
             return `<!DOCTYPE html>
       <html lang="en">
-      <head><meta charset="UTF-8"><style>body{font-family:sans-serif;padding:1em;}textarea{width:100%;height:60px;}button{margin-top:10px;}</style></head>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body {
+            margin: 0;
+            padding: 0;
+            font-family: sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+          }
+
+          #chat {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1em;
+            background: #f4f4f4;
+          }
+
+          .message {
+            max-width: 80%;
+            margin: 0.5em 0;
+            padding: 0.75em 1em;
+            border-radius: 10px;
+            line-height: 1.4;
+          }
+
+          .user {
+            background-color: #d1e7ff;
+            align-self: flex-end;
+            text-align: right;
+          }
+
+          .assistant {
+            background-color: #ffffff;
+            align-self: flex-start;
+            border: 1px solid #ccc;
+          }
+
+          #inputArea {
+            display: flex;
+            padding: 0.5em;
+            border-top: 1px solid #ccc;
+            background: #fff;
+          }
+
+          #input {
+            flex: 1;
+            padding: 0.5em;
+            font-size: 1em;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+          }
+
+          button {
+            margin-left: 0.5em;
+            padding: 0.5em 1em;
+            font-size: 1em;
+          }
+        </style>
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+      </head>
       <body>
-        <div id="chat">${content}</div>
-        <textarea id="input" placeholder="Type your follow-up question..."></textarea>
-        <button onclick="send()">Send</button>
+        <div id="chat"></div>
+
+        <div id="inputArea">
+          <input id="input" placeholder="Type your follow-up question..." />
+          <button id="sendBtn">Send</button>
+        </div>
 
         <script>
           const vscode = acquireVsCodeApi();
-          function send() {
-            const input = document.getElementById('input');
-            vscode.postMessage({ type: 'ask', question: input.value });
-            input.value = '';
+
+          function appendMessage(role, content) {
+            const chat = document.getElementById('chat');
+            const div = document.createElement('div');
+            div.className = 'message ' + role;
+            const label = role === 'user' ? '👤 You' : '🤖 AI';
+            const rendered = role === 'assistant' ? marked.parse(content) : content;
+            div.innerHTML = '<strong>' + label + ':</strong><br>' + rendered;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
           }
+
+          document.getElementById('sendBtn').addEventListener('click', () => {
+            const input = document.getElementById('input');
+            const question = input.value.trim();
+            if (question) {
+              appendMessage('user', question);
+              vscode.postMessage({ type: 'ask', question });
+              input.value = '';
+            }
+          });
+
+          window.addEventListener('message', event => {
+            const msg = event.data;
+            if (msg.type === 'answer') {
+              appendMessage('assistant', msg.content);
+            }
+          });
         </script>
       </body>
       </html>`;
         }
-        panel.webview.html = getHTML('<p>💬 Ask a follow-up question...</p>');
+        panel.webview.html = getHTML();
         panel.webview.onDidReceiveMessage((msg) => __awaiter(this, void 0, void 0, function* () {
             var _h;
             if (msg.type === 'ask') {
@@ -319,7 +441,11 @@ function activate(ctx) {
                 const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
                 const apiUrl = cfg.get('apiUrl') || '';
                 const apiKey = cfg.get('apiKey') || '';
-                const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
+                //const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
+                const fullPrompt = conversation
+                    .filter(msg => msg.role !== 'followup')
+                    .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
+                    .join('\n') + '\nAssistant:';
                 const body = {
                     model: 'gemma3:27b',
                     prompt: fullPrompt,
@@ -334,8 +460,8 @@ function activate(ctx) {
                     });
                     const answer = ((_h = resp.data.message) === null || _h === void 0 ? void 0 : _h.content) || resp.data.response || 'No response received';
                     conversation.push({ role: 'assistant', content: answer });
-                    const chatHtml = conversation.map(msg => `<p><strong>${msg.role === 'user' ? '👤 You' : '🤖 AI'}:</strong> ${msg.content}</p>`).join('');
-                    panel.webview.html = getHTML(chatHtml);
+                    // const chatHtml = buildChatHtml(conversation);
+                    panel.webview.postMessage({ type: 'answer', content: answer });
                 }
                 catch (e) {
                     vscode.window.showErrorMessage('Failed to fetch follow-up response: ' + e.message);
@@ -356,86 +482,8 @@ function activate(ctx) {
             return items;
         }
     }));
-    //   ctx.subscriptions.push(
-    //   vscode.commands.registerCommand('jupyterAiFeedback.explainActiveMarkdownCell', async () => {
-    //     const editor = vscode.window.activeNotebookEditor;
-    //     if (!editor) {
-    //       return vscode.window.showErrorMessage('No active notebook editor');
-    //     }
-    //     const activeCell = editor.selections?.[0];
-    //     if (!activeCell) {
-    //       return vscode.window.showErrorMessage('No selected cell');
-    //     }
-    //     const cell = editor.notebook.cellAt(activeCell.start);
-    //     if (cell.kind !== vscode.NotebookCellKind.Markup) {
-    //       return vscode.window.showWarningMessage('Current cell is not a markdown cell.');
-    //     }
-    //     const content = cell.document.getText().toLowerCase();
-    //     if (!content.includes('feedback')) {
-    //       return vscode.window.showWarningMessage('This markdown cell does not appear to contain feedback.');
-    //     }
-    //     const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
-    //     const apiUrl = cfg.get<string>('apiUrl') || '';
-    //     const apiKey = cfg.get<string>('apiKey') || '';
-    //     const promptTpl = cfg.get<string>('promptTemplateMarkdown') || 'Explain the following content:\n\n{{content}}';
-    //     if (!apiUrl || !apiKey || !promptTpl) {
-    //       return vscode.window.showErrorMessage('Please set apiUrl, apiKey and promptTemplateMarkdown');
-    //     }
-    //     const prompt = promptTpl.replace('{{content}}', content);
-    //     const body = {
-    //       model: 'gemma3:27b',
-    //       messages: [{ role: 'user', content: prompt }]
-    //     };
-    //     let result;
-    //     try {
-    //       const resp = await axios.post(apiUrl, body, {
-    //         headers: {
-    //           'content-Type': 'application/json',
-    //           Authorization: `Bearer ${apiKey}`
-    //         }
-    //       });
-    //       result = resp.data.choices[0].message.content;
-    //     } catch (e: any) {
-    //       return vscode.window.showErrorMessage('AI explain failed: ' + e.message);
-    //     }
-    //     await vscode.commands.executeCommand('notebook.cell.insertMarkdownCellBelow');
-    //     const newCell = editor.notebook.cellAt(cell.index + 1);
-    //     const doc = newCell.document;
-    //     const lastLine = doc.lineCount > 0 ? doc.lineCount - 1 : 0;
-    //     const fullRange = new vscode.Range(0, 0, lastLine, doc.lineAt(lastLine).text.length);
-    //     const contentToInsert = `**AI Explanation**\n\n${result.replace(/\n/g, '  \n')}`;
-    //     const edit = new vscode.WorkspaceEdit();
-    //     edit.replace(doc.uri, fullRange, contentToInsert);
-    //     await vscode.workspace.applyEdit(edit);
-    //   })
-    // );
 }
 exports.activate = activate;
-function getWebviewContent(question, answer) {
-    const htmlAnswer = (0, marked_1.marked)(answer); // ✅ 把 markdown 转成 HTML
-    return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <style>
-        body { font-family: sans-serif; padding: 20px; }
-        .question { font-weight: bold; margin-bottom: 1em; }
-        .answer { color: #333; }
-        h2, h3, h4 { color: #007acc; }
-        ul { margin-left: 1.5em; }
-        code { background: #eee; padding: 2px 4px; border-radius: 4px; }
-      </style>
-    </head>
-    <body>
-      <h2>💬 Follow-up Answer</h2>
-      <div class="question">Q: ${question}</div>
-      <div class="answer">A:${htmlAnswer}</div>
-    </body>
-    </html>
-  `;
-}
-// Markdown cell
 function deactivate() { }
 exports.deactivate = deactivate;
 //# sourceMappingURL=extension.js.map
