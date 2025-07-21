@@ -1536,6 +1536,31 @@ export function activate(ctx: vscode.ExtensionContext) {
         };
         items.push(speechItem);
       }
+
+      const text = cell.document.getText().toLowerCase()
+      if(cell.kind === vscode.NotebookCellKind.Markup &&
+   (text.includes('**feedback**') || text.includes('**🤖feedback expansion**'))){
+        const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+        const mode = cfg.get<string>('feedbackMode');
+
+        const label =
+          mode === 'Expand'
+            ? '📖 ➤ Expand | Explain'
+            : '📖 Expand | ➤ Explain';
+
+        const markdownItem = new vscode.NotebookCellStatusBarItem(
+        label,
+        vscode.NotebookCellStatusBarAlignment.Right
+        );
+        markdownItem.command = {
+          command : 'jupyterAiFeedback.explainMarkdownCell',
+          title: 'Expand or Explain Feedback Markdown',
+          arguments:[cell]
+        }
+        markdownItem.priority = 100;
+        markdownItem.tooltip = `Use AI to ${mode} the feedback`
+        items.push(markdownItem)
+      }
       return items;
     }
   };
@@ -2152,6 +2177,338 @@ ${feedback}
   ctx.subscriptions.push(
     vscode.commands.registerCommand('jupyterAiFeedback.toggleRecording', async (cell: vscode.NotebookCell) => {
       await toggleRecording(cell);
+    })
+  );
+
+  async function replaceCellContent(doc:vscode.TextDocument, content:string){
+    const edit = new vscode.WorkspaceEdit();
+    const start = new vscode.Position(0,0);
+    const end = doc.lineAt(doc.lineCount - 1).range.end;
+    const fullRange = new vscode.Range(start, end);
+    edit.replace(doc.uri, fullRange, content);
+    await vscode.workspace.applyEdit(edit);
+  }
+
+  function cleanMarkdown(text:string):string{
+    let cleaned = text;
+
+    // Complete unmatched markdown symbols
+    const count = (str: string) => (cleaned.match(new RegExp(str, 'g')) || []).length;
+    if (count('\\*\\*') % 2 !== 0) cleaned += '**';
+    if ((count('\\*') - 2 * count('\\*\\*')) % 2 !== 0) cleaned += '*';
+    if (count('`') % 2 !== 0) cleaned += '`';
+
+    // Ensure headings start on a new line
+    cleaned = cleaned.replace(/(##\\s.*?)(?=\\S)/g, '\n$1');
+
+    // Remove unnecessary backslashes
+    cleaned = cleaned.replace(/\\([a-zA-Z])/g, '$1');
+    cleaned = cleaned.replace(/\\\\n/g, '\n');
+
+    return cleaned.trim();
+  }
+
+  // Markdown cell
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand(
+      'jupyterAiFeedback.explainMarkdownCell',
+      async(cell: vscode.NotebookCell) => {
+        const editor = vscode.window.activeNotebookEditor;
+        if (!editor) {
+          return vscode.window.showErrorMessage('No activity')
+        }
+
+        const content = cell.document.getText()?.toLowerCase();
+        if (!content.includes('feedback')) {
+          vscode.window.showWarningMessage('This markdown cell does not appear to contain feedback.');
+          return;
+        }
+
+        const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+        const mode = cfg.get<string>('feedbackMode');
+        const apiUrl = cfg.get<string>('apiUrl') || '';
+        const apiKey = cfg.get<string>('apiKey') || '';
+        if (!apiUrl || !apiKey || !mode) {
+          return vscode.window.showErrorMessage(
+            'Please set apiUrl, apiKey and feedbackMode in your settings'
+          );
+        }
+
+        await syncGitRepo()
+        const promptTpl = await getPromptContent(mode);
+
+        const prompt = promptTpl.replace('{{content}}', content);
+        const title = mode === 'Expand' ? 'Feedback Expansion' : 'Explanation';
+
+        const body = {
+          model : 'gemma3:27b',
+          prompt: prompt,
+          stream : true
+        };
+
+        const header = `**🤖${title}**`;
+        const generatingNote = `*(Generating...)*`;
+        const finishedNote = `**✅ AI Generation Completed**`;
+
+        // modify markdown cell
+        let newCell: vscode.NotebookCell;
+        const nextIndex = cell.index + 1;
+
+        if (
+          nextIndex < editor.notebook.cellCount &&
+          editor.notebook.cellAt(nextIndex).kind === vscode.NotebookCellKind.Markup &&
+          editor.notebook.cellAt(nextIndex).document.getText().startsWith(header)
+        ) {
+          newCell = editor.notebook.cellAt(nextIndex);
+        } else {
+          await vscode.commands.executeCommand('notebook.cell.insertMarkdownCellBelow');
+          newCell = editor.notebook.cellAt(cell.index + 1);
+        }
+
+        const doc = newCell.document;
+        await replaceCellContent(doc, `${header}\n\n${generatingNote}\n`);
+
+        try {
+          const resp = await axios.post(apiUrl, body, {
+            headers: {
+              'content-Type' : 'application/json',
+              Authorization: `Bearer ${apiKey}`
+            },
+            responseType: 'stream'
+          });
+
+          let accumulated = '';
+          for await (const chunk of resp.data) {
+            const line = chunk.toString().trim();
+            const match = line.match(/"response":"(.*?)"/);
+            if (match) {
+              const delta = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+              accumulated += delta;
+
+              const safeText = cleanMarkdown(accumulated);
+              const updatedContent = `${header}\n\n${safeText.replace(/\n/g, '  \n')}\n\n${generatingNote}`;
+              await replaceCellContent(doc,updatedContent);
+            }
+          }
+
+          // give a sign that it is finished generating
+          const finalText = cleanMarkdown(accumulated);
+          const finalContent = `${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n${finishedNote}`;
+          await replaceCellContent(doc,finalContent);
+
+        } catch (e:any) {
+          console.error("AI Extension fail:", e);
+          const errorMsg = `${header}\n\n❌ AI generation failed:\n\n\`${e.message}\``;
+          await replaceCellContent(doc, errorMsg);
+          return vscode.window.showErrorMessage('Ai Extension fail:' + e.message);
+        }
+      }
+    )
+  );
+
+  // follow up question button
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand('jupyterAiFeedback.askFollowUpFromButton', async (cell: vscode.NotebookCell) => {
+      const editor = vscode.window.activeNotebookEditor;
+      if (!editor) {
+        return vscode.window.showErrorMessage('No active notebook editor');
+      }
+
+      const explanation = cell.document.getText()
+      const conversation: { role: 'user' | 'assistant' | 'followup'; content: string }[] = [
+        {role:'assistant', content:explanation}
+      ];
+
+      let followupPrompt = '';
+      try{
+        followupPrompt = await getPromptContent('Followup');
+        conversation.push({role:'followup', content:followupPrompt});
+      } catch(e:any){
+        vscode.window.showErrorMessage('⚠️ Failed to load Followup prompt: ' + e.message);
+      }
+
+      conversation.push({role:'assistant', content:explanation});
+
+      const panel = vscode.window.createWebviewPanel(
+        'followUpChat',
+        'Follow-up Chat',
+        vscode.ViewColumn.Beside,
+        { enableScripts: true }
+      );
+
+
+      function getHTML() {
+      return `<!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body {
+            margin: 0;
+            padding: 0;
+            font-family: sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+          }
+
+          #chat {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1em;
+            background: #f4f4f4;
+          }
+
+          .message {
+            max-width: 80%;
+            margin: 0.5em 0;
+            padding: 0.75em 1em;
+            border-radius: 10px;
+            line-height: 1.4;
+          }
+
+          .user {
+            background-color: #d1e7ff;
+            align-self: flex-end;
+            text-align: right;
+          }
+
+          .assistant {
+            background-color: #ffffff;
+            align-self: flex-start;
+            border: 1px solid #ccc;
+          }
+
+          #inputArea {
+            display: flex;
+            padding: 0.5em;
+            border-top: 1px solid #ccc;
+            background: #fff;
+          }
+
+          #input {
+            flex: 1;
+            padding: 0.5em;
+            font-size: 1em;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+          }
+
+          button {
+            margin-left: 0.5em;
+            padding: 0.5em 1em;
+            font-size: 1em;
+          }
+        </style>
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+      </head>
+      <body>
+        <div id="chat"></div>
+
+        <div id="inputArea">
+          <input id="input" placeholder="Type your follow-up question..." />
+          <button id="sendBtn">Send</button>
+        </div>
+
+        <script>
+          const vscode = acquireVsCodeApi();
+
+          function appendMessage(role, content) {
+            const chat = document.getElementById('chat');
+            const div = document.createElement('div');
+            div.className = 'message ' + role;
+            const label = role === 'user' ? '👤 You' : '🤖 AI';
+            const rendered = role === 'assistant' ? marked.parse(content) : content;
+            div.innerHTML = '<strong>' + label + ':</strong><br>' + rendered;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+          }
+
+          document.getElementById('sendBtn').addEventListener('click', () => {
+            const input = document.getElementById('input');
+            const question = input.value.trim();
+            if (question) {
+              appendMessage('user', question);
+              vscode.postMessage({ type: 'ask', question });
+              input.value = '';
+            }
+          });
+
+          window.addEventListener('message', event => {
+            const msg = event.data;
+            if (msg.type === 'answer') {
+              appendMessage('assistant', msg.content);
+            }
+          });
+        </script>
+      </body>
+      </html>`;
+        }
+
+      panel.webview.html = getHTML();
+
+      panel.webview.onDidReceiveMessage(async (msg) => {
+        if (msg.type === 'ask') {
+          const question = msg.question;
+          conversation.push({ role: 'user', content: question });
+
+          const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+          const apiUrl = cfg.get<string>('apiUrl') || '';
+          const apiKey = cfg.get<string>('apiKey') || '';
+
+          //const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
+          const fullPrompt = conversation
+            .filter(msg => msg.role !== 'followup')
+            .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
+            .join('\n') + '\nAssistant:';
+
+          const body = {
+            model: 'gemma3:27b',
+            prompt: fullPrompt,
+            stream: false
+          };
+
+          try {
+            const resp = await axios.post(apiUrl, body, {
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`
+              }
+            });
+
+            const answer = resp.data.message?.content || resp.data.response || 'No response received';
+            conversation.push({ role: 'assistant', content: answer });
+
+            // const chatHtml = buildChatHtml(conversation);
+            panel.webview.postMessage({type: 'answer', content:answer});
+          } catch (e: any) {
+            vscode.window.showErrorMessage('Failed to fetch follow-up response: ' + e.message);
+          }
+        }
+      });
+    })
+  );
+
+  ctx.subscriptions.push(
+    vscode.notebooks.registerNotebookCellStatusBarItemProvider('jupyter-notebook', {
+    provideCellStatusBarItems(cell, _token) {
+      const items: vscode.NotebookCellStatusBarItem[] = [];
+
+      if (
+        cell.kind === vscode.NotebookCellKind.Markup &&
+        cell.document.getText().includes('**🤖Explanation**')
+      ) {
+        const item = new vscode.NotebookCellStatusBarItem(
+          '💬 Ask follow-up question',
+          vscode.NotebookCellStatusBarAlignment.Right
+        );
+        item.command = 'jupyterAiFeedback.askFollowUpFromButton';
+        item.tooltip = 'Ask a follow-up question about this explanation';
+        items.push(item);
+      }
+
+      return items;
+        }
     })
   );
 }

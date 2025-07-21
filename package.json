@@ -21,6 +21,7 @@
     "get-port": "^7.1.0",
     "microsoft-cognitiveservices-speech-sdk": "^1.44.1",
     "node-record-lpcm16": "^1.0.1"
+    "marked": "^16.0.0",
   },
   "devDependencies": {
     "@types/node": "^18.7.18",
@@ -75,6 +76,19 @@
           "type": "string",
           "default": "error_chat",
           "description": "Template ID to use for Error Helper chat conversations (fetched from GitHub repository)"
+        },
+        "jupyterAiFeedback.feedbackMode": {
+          "type": "string",
+          "default": "Expand",
+          "enum": [
+            "Expand",
+            "Explain"
+          ],
+          "enumDescriptions": [
+            "Expand the feedback for students",
+            "Explain the feedback in simpler terms"
+          ],
+          "description": "Choose how the feedback will be processed by the AI"
         }
       }
     },
@@ -175,6 +189,10 @@
       {
         "command": "jupyterAiFeedback.toggleRecording",
         "title": "🎙️ Toggle Speech-to-Text Recording"
+      },
+      {
+        "command": "jupyterAiFeedback.askFollowUpFromButton",
+        "title": "Ask Follow-up Question (via Button)"
       }
     ],
     "notebookCellStatusBarItemProviders": [
@@ -194,6 +212,12 @@
           {
             "command": "jupyterAiFeedback.toggleRecording",
             "alignment": "left",
+            "priority": 100
+          },
+          {
+            "when": "notebookCellKind == markup",
+            "command": "jupyterAiFeedback.explainMarkdownCell",
+            "alignment": "right",
             "priority": 100
           }
         ]
