@@ -2228,6 +2228,7 @@ ${feedback}
         const mode = cfg.get<string>('feedbackMode');
         const apiUrl = cfg.get<string>('apiUrl') || '';
         const apiKey = cfg.get<string>('apiKey') || '';
+        const modelName = cfg.get<string>('modelName') || '';
         if (!apiUrl || !apiKey || !mode) {
           return vscode.window.showErrorMessage(
             'Please set apiUrl, apiKey and feedbackMode in your settings'
@@ -2241,7 +2242,7 @@ ${feedback}
         const title = mode === 'Expand' ? 'Feedback Expansion' : 'Explanation';
 
         const body = {
-          model : 'gemma3:27b',
+          model : modelName,
           prompt: prompt,
           stream : true
         };
