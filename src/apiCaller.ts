@@ -1,10 +1,9 @@
-import * as vscode from 'vscode';
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import FormData from 'form-data';
 import { ProviderConfig } from './configParser';
-import { STT_PORT_KEY, getSttPort } from './localServer'; 
+import { getSttPort } from './localServer'; 
 
 /**
  * Send audio to corresponding STT service and return transcribed text
@@ -22,7 +21,7 @@ export async function sendAudioToApi(
   // Request local service
   const requestBody: any = {
     audio: audioBase64,
-    model: cfg.modelSize || 'tiny'
+    model: 'tiny'  // Always use tiny model
   };
   // Only add language if user explicitly set it (for auto-detection)
   if (cfg.language) {

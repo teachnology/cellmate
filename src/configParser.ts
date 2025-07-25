@@ -6,14 +6,9 @@ export interface ProviderConfig {
   provider: ProviderType;
   language?: string;        // Common language code
 
-  // local
-  modelSize?: 'tiny' | 'small';
-
   // OpenAI
   openaiApiKey?: string;
   openaiModel?: string;
-  openaiPrompt?: string;
-  openaiTemperature?: number;
 
   // Azure
   azureApiKey?: string;
@@ -29,7 +24,6 @@ export function getProviderConfig(): ProviderConfig {
     const language = cfg.get<string>('speechLocal.language');
     return {
       provider,
-      modelSize: cfg.get('speechLocal.modelSize') as 'tiny'|'small',
       // If the user does not set the language, pass undefined to let Whisper auto-detect
       language: language || undefined
     };
@@ -47,9 +41,7 @@ export function getProviderConfig(): ProviderConfig {
       // If the user does not set the language, pass undefined to let OpenAI auto-detect
       language: language || undefined,
       openaiApiKey,
-      openaiModel: cfg.get('speechOpenai.modelId') || 'whisper-1',
-      openaiPrompt: '',
-      openaiTemperature: 0
+      openaiModel: cfg.get('speechOpenai.modelId') || 'whisper-1'
     };
   }
 
