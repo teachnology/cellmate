@@ -12,15 +12,12 @@
   ],
   "main": "./out/extension.js",
   "dependencies": {
-    "@azure/core-auth": "^1.9.0",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "axios": "^1.5.0",
     "simple-git": "^3.19.1",
     "tmp": "^0.2.3",
     "extract-zip": "^2.0.1",
     "get-port": "^7.1.0",
-    "microsoft-cognitiveservices-speech-sdk": "^1.44.1",
-    "node-record-lpcm16": "^1.0.1",
     "marked": "^16.0.0"
   },
   "devDependencies": {
