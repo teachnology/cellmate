@@ -40,14 +40,15 @@ class ErrorHelperPanel {
   private cell: vscode.NotebookCell;
   private messages: ChatMessage[] = [];
   private config: LLMConfig;
+  private errorHelperFeedback: string;
 
-  public static createOrShow(extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig): void {
+  public static createOrShow(extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig, errorHelperFeedback?: string): void {
     const column = vscode.ViewColumn.Two;
 
     // If we already have a panel, show it
     if (ErrorHelperPanel.currentPanel) {
       ErrorHelperPanel.currentPanel.panel.reveal(column);
-      ErrorHelperPanel.currentPanel.updateCell(cell);
+      ErrorHelperPanel.currentPanel.updateCell(cell, errorHelperFeedback);
       return;
     }
 
@@ -63,14 +64,15 @@ class ErrorHelperPanel {
       }
     );
 
-    ErrorHelperPanel.currentPanel = new ErrorHelperPanel(panel, extensionUri, cell, config);
+    ErrorHelperPanel.currentPanel = new ErrorHelperPanel(panel, extensionUri, cell, config, errorHelperFeedback || '');
   }
 
-  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig) {
+  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig, errorHelperFeedback: string) {
     this.panel = panel;
     this.extensionUri = extensionUri;
     this.cell = cell;
     this.config = config;
+    this.errorHelperFeedback = errorHelperFeedback;
 
     // Set the webview's initial html content
     this.update();
@@ -84,7 +86,6 @@ class ErrorHelperPanel {
         try {
           switch (message.command) {
             case 'sendMessage':
-            case 'quickAction':
               if (message.text) {
                 await this.handleUserMessage(message.text);
               }
@@ -148,16 +149,23 @@ class ErrorHelperPanel {
       // Use GitHub template system for chat prompts
       await syncGitRepo();
 
-      // Get chat template ID from settings
-      const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
-      const chatTemplateId = cfg.get<string>('chatTemplateId', 'error_chat');
-
+      const chatTemplateId = 'error_chat';
       const promptTemplate = await getPromptContent(chatTemplateId);
 
       let prompt = promptTemplate.replace('{{code}}', code);
       prompt = prompt.replace('{{error_output}}', cellOutput.output);
       prompt = prompt.replace('{{conversation_history}}', conversationHistory);
       prompt = prompt.replace('{{user_message}}', userMessage);
+
+      // Handle error_helper_feedback - if empty, remove the section
+      if (this.errorHelperFeedback && this.errorHelperFeedback.trim()) {
+        prompt = prompt.replace('{{error_helper_feedback}}', this.errorHelperFeedback);
+      } else {
+        // Remove the entire Previous Error Helper Analysis section if no feedback
+        prompt = prompt.replace(/\*\*Previous Error Helper Analysis:\*\*\s*\{\{error_helper_feedback\}\}\s*\n\n?/g, '');
+        // Fallback: just replace the placeholder with empty string
+        prompt = prompt.replace('{{error_helper_feedback}}', '');
+      }
 
       return await callLLMAPI(prompt, this.config);
     } catch (error) {
@@ -168,16 +176,20 @@ class ErrorHelperPanel {
 
 **Code:** ${code}
 **Error:** ${cellOutput.output}
+${this.errorHelperFeedback ? `**Previous Analysis:** ${this.errorHelperFeedback}` : ''}
 **Question:** ${userMessage}
 
-Please provide a helpful response.`;
+Please provide a helpful response based on the code, error${this.errorHelperFeedback ? ', and previous analysis' : ''}.`;
 
       return await callLLMAPI(fallbackPrompt, this.config);
     }
   }
 
-  public updateCell(cell: vscode.NotebookCell) {
+  public updateCell(cell: vscode.NotebookCell, errorHelperFeedback?: string) {
     this.cell = cell;
+    if (errorHelperFeedback) {
+      this.errorHelperFeedback = errorHelperFeedback;
+    }
     this.messages = []; // Reset conversation for new cell
     this.update();
   }
@@ -193,10 +205,10 @@ Please provide a helpful response.`;
     const code = this.cell.document.getText();
     const cellOutput = getCellOutput(this.cell);
 
-    this.panel.webview.html = this.getHtmlForWebview(code, cellOutput.output);
+    this.panel.webview.html = this.getHtmlForWebview(code, cellOutput.output, this.errorHelperFeedback);
   }
 
-  private getHtmlForWebview(code: string, errorOutput: string): string {
+  private getHtmlForWebview(code: string, errorOutput: string, errorHelperFeedback: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -243,7 +255,7 @@ Please provide a helpful response.`;
         .context-section {
             background: var(--vscode-input-background);
             border-bottom: 1px solid var(--vscode-panel-border);
-            max-height: 200px;
+            max-height: 300px;
             overflow-y: auto;
         }
 
@@ -265,6 +277,18 @@ Please provide a helpful response.`;
             border-radius: 4px;
             padding: 10px;
             border-left: 3px solid var(--vscode-inputValidation-errorBorder);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .feedback-content {
+            padding: 0 15px 12px;
+            font-size: 12px;
+            background: var(--vscode-editor-hoverHighlightBackground);
+            margin: 0 15px 12px;
+            border-radius: 4px;
+            padding: 10px;
+            border-left: 3px solid var(--vscode-textLink-foreground);
             white-space: pre-wrap;
             word-wrap: break-word;
         }
@@ -369,28 +393,6 @@ Please provide a helpful response.`;
             border-top: 1px solid var(--vscode-panel-border);
         }
 
-        .quick-actions {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 10px;
-            flex-wrap: wrap;
-        }
-
-        .quick-action {
-            background: var(--vscode-button-secondaryBackground);
-            color: var(--vscode-button-secondaryForeground);
-            border: none;
-            padding: 6px 10px;
-            border-radius: 12px;
-            font-size: 11px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        .quick-action:hover {
-            background: var(--vscode-button-secondaryHoverBackground);
-        }
-
         .input-container {
             display: flex;
             background: var(--vscode-input-background);
@@ -456,16 +458,21 @@ Please provide a helpful response.`;
 <body>
     <div class="chat-header">
         <div class="chat-title">
-            <span>🆘</span>
+            <span>💬</span>
             Error Helper Chat
         </div>
     </div>
 
     <div class="context-section">
-        <div class="context-header">Error Context</div>
+        <div class="context-header">Code & Error Context</div>
         <div class="context-content">${code}
 
-❌ ${errorOutput}</div>
+❌ Error Output:
+${errorOutput}</div>
+        ${errorHelperFeedback ? `
+        <div class="context-header">Previous Analysis</div>
+        <div class="feedback-content">${errorHelperFeedback}</div>
+        ` : ''}
     </div>
 
     <div class="chat-messages" id="chatMessages">
@@ -475,23 +482,17 @@ Please provide a helpful response.`;
                 AI Helper
             </div>
             <div>
-                I can see you're having trouble with your code. I'm here to help you understand the error and guide you toward a solution. What specific part would you like me to explain?
+                I have your code, error details${errorHelperFeedback ? ', and previous analysis' : ''}. What specific questions do you have about this error?
             </div>
         </div>
     </div>
 
     <div class="chat-input">
-        <div class="quick-actions">
-            <button class="quick-action" onclick="sendQuickMessage('What does this error mean?')">❓ What does this error mean?</button>
-            <button class="quick-action" onclick="sendQuickMessage('How do I fix this?')">🛠️ How do I fix this?</button>
-            <button class="quick-action" onclick="sendQuickMessage('Can you show me an example?')">📝 Show me an example</button>
-            <button class="quick-action" onclick="sendQuickMessage('Why did this happen?')">🔍 Why did this happen?</button>
-        </div>
         <div class="input-container">
             <textarea 
                 class="message-input" 
                 id="messageInput"
-                placeholder="Ask follow-up questions about this error..."
+                placeholder="Ask your follow-up questions here..."
                 rows="1"
                 onkeydown="handleKeyDown(event)"
             ></textarea>
@@ -515,16 +516,6 @@ Please provide a helpful response.`;
             
             vscode.postMessage({
                 command: 'sendMessage',
-                text: message
-            });
-        }
-
-        function sendQuickMessage(message) {
-            addUserMessage(message);
-            showTypingIndicator();
-            
-            vscode.postMessage({
-                command: 'quickAction',
                 text: message
             });
         }
@@ -1161,7 +1152,84 @@ function getCellOutput(
   return { hasOutput, output: outputText.trim(), executionError };
 }
 
-// insert markdown cell below the specified cell
+// Helper function: Find existing Error Helper feedback from nearby cells
+function findExistingErrorHelperFeedback(cell: vscode.NotebookCell): string | undefined {
+  const notebook = cell.notebook;
+  const startIndex = cell.index;
+
+  // Look in the next few cells for Error Helper feedback
+  for (let i = startIndex + 1; i < Math.min(startIndex + 5, notebook.cellCount); i++) {
+    const nextCell = notebook.cellAt(i);
+
+    if (nextCell.kind === vscode.NotebookCellKind.Markup) {
+      const content = nextCell.document.getText();
+
+      // Check if this is an Error Helper markdown cell
+      if (content.includes('🆘 Error Helper') || content.includes('**🆘 Error Helper**')) {
+        // Extract the feedback content (skip the header)
+        const lines = content.split('\n');
+        const feedbackLines = [];
+        let foundContent = false;
+
+        for (const line of lines) {
+          if (line.includes('🆘 Error Helper')) {
+            foundContent = true;
+            continue;
+          }
+          if (foundContent && line.trim() !== '' && !line.includes('---') && !line.includes('💬')) {
+            feedbackLines.push(line);
+          }
+          if (line.includes('---')) {
+            break; // Stop at the separator
+          }
+        }
+
+        if (feedbackLines.length > 0) {
+          return feedbackLines.join('\n').trim();
+        }
+      }
+    }
+  }
+
+  // Also check if the current cell has Error Helper output
+  if (cell.outputs) {
+    for (const output of cell.outputs) {
+      for (const item of output.items) {
+        if (item.mime === 'text/markdown') {
+          const decoder = new TextDecoder();
+          const content = decoder.decode(item.data);
+
+          if (content.includes('🆘 Error Helper Analysis')) {
+            // Extract the analysis content
+            const lines = content.split('\n');
+            const analysisLines = [];
+            let foundContent = false;
+
+            for (const line of lines) {
+              if (line.includes('🆘 Error Helper Analysis')) {
+                foundContent = true;
+                continue;
+              }
+              if (foundContent && line.trim() !== '' && !line.includes('---') && !line.includes('💬')) {
+                analysisLines.push(line);
+              }
+              if (line.includes('---')) {
+                break;
+              }
+            }
+
+            if (analysisLines.length > 0) {
+              return analysisLines.join('\n').trim();
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
 async function insertMarkdownCellBelow(notebook: vscode.NotebookDocument, cellIndex: number, content: string) {
   const edit = new vscode.WorkspaceEdit();
   const newCell = new vscode.NotebookCellData(
@@ -1449,18 +1517,31 @@ export function activate(ctx: vscode.ExtensionContext) {
     provideCellStatusBarItems(cell) {
       const items = [];
       if (cell.document.languageId === 'python') {
-          // Error Helper button - always show for Python cells
-          const errorHelperItem = new vscode.NotebookCellStatusBarItem(
-            '$(warning) 🆘 Error Helper',
-            vscode.NotebookCellStatusBarAlignment.Right
-          );
-          errorHelperItem.priority = 200;
-          errorHelperItem.command = {
-            command: 'jupyterAiFeedback.errorHelper',
-            title: 'Error Helper',
-            arguments: [cell]
-          };
-          items.push(errorHelperItem);
+          const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+          const alwaysShowErrorHelper = cfg.get<boolean>('errorHelper.alwaysShow', false);
+
+          const cellOutput = getCellOutput(cell);
+          const hasError = cellOutput.executionError ||
+                          (cellOutput.hasOutput && cellOutput.output.toLowerCase().includes('error'));
+
+          const shouldShowErrorHelper = alwaysShowErrorHelper || hasError;
+
+          if (shouldShowErrorHelper) {
+            const errorHelperItem = new vscode.NotebookCellStatusBarItem(
+              '🆘 Error Helper',
+              vscode.NotebookCellStatusBarAlignment.Right
+            );
+            errorHelperItem.priority = 200;
+            errorHelperItem.command = {
+              command: 'jupyterAiFeedback.errorHelper',
+              title: 'Error Helper',
+              arguments: [cell]
+            };
+            errorHelperItem.tooltip = hasError ?
+              'Get AI help with this error' :
+              'Get AI help with your code (no errors detected)';
+            items.push(errorHelperItem);
+          }
 
           // Original AI Feedback button
           const item = new vscode.NotebookCellStatusBarItem(
@@ -1607,6 +1688,15 @@ export function activate(ctx: vscode.ExtensionContext) {
 
           if (outputMode === 'cellOutput') {
             await addAnalysisToCellOutput(cell, feedback);
+
+            const action = await vscode.window.showInformationMessage(
+              'Error analysis complete. Want to ask follow-up questions?',
+              'Start Chat'
+            );
+
+            if (action === 'Start Chat') {
+              ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, feedback);
+            }
           } else {
             // markdown mode
             const isMac = process.platform === 'darwin';
@@ -1619,6 +1709,15 @@ ${feedback}
 ---
 *💬 Want to ask follow-up questions? Use Command Palette (${shortcut}) to run "Start Error Helper Chat".*`;
             await insertMarkdownCellBelow(editor.notebook, cell.index, content);
+
+            const action = await vscode.window.showInformationMessage(
+              'Error analysis complete. Want to ask follow-up questions?',
+              'Start Chat'
+            );
+
+            if (action === 'Start Chat') {
+              ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, feedback);
+            }
           }
 
         } catch (e: any) {
@@ -1637,7 +1736,7 @@ ${feedback}
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
       'jupyterAiFeedback.startErrorChat',
-      async (cell?: vscode.NotebookCell) => {
+      async (cell?: vscode.NotebookCell, errorHelperFeedback?: string) => {
         const config = readLLMConfig();
         if (!config) return;
 
@@ -1665,7 +1764,11 @@ ${feedback}
           return;
         }
 
-        ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config);
+        if (!errorHelperFeedback) {
+          errorHelperFeedback = findExistingErrorHelperFeedback(cell);
+        }
+
+        ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, errorHelperFeedback);
       }
     )
   );
@@ -2013,41 +2116,6 @@ ${feedback}
           await vscode.workspace.getConfiguration('jupyterAiFeedback')
             .update('templateId', pick.label, vscode.ConfigurationTarget.Global);
           vscode.window.showInformationMessage(`Selected template: ${pick.label}`);
-        }
-      }
-    )
-  );
-
-  // Chat template selection command
-  ctx.subscriptions.push(
-    vscode.commands.registerCommand(
-      'jupyterAiFeedback.selectChatTemplate',
-      async () => {
-        await syncGitRepo();
-        const templates = await listLocalTemplates();
-        if (templates.length === 0) {
-          vscode.window.showInformationMessage('No available templates');
-          return;
-        }
-        // Filter templates that are suitable for chat (could be all, or have specific naming)
-        const chatTemplates = templates.filter(t =>
-          t.id.includes('chat') || t.id.includes('conversation') || t.id === 'error_chat'
-        );
-
-        // If no specific chat templates found, show all templates
-        const templatesToShow = chatTemplates.length > 0 ? chatTemplates : templates;
-
-        const items = templatesToShow.map(t => ({
-          label: t.id,
-          description: t.filename
-        }));
-        const pick = await vscode.window.showQuickPick(items, {
-          placeHolder: 'Please select a chat template'
-        });
-        if (pick) {
-          await vscode.workspace.getConfiguration('jupyterAiFeedback')
-            .update('chatTemplateId', pick.label, vscode.ConfigurationTarget.Global);
-          vscode.window.showInformationMessage(`Selected chat template: ${pick.label}`);
         }
       }
     )

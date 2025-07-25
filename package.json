@@ -75,10 +75,11 @@
           ],
           "description": "Choose how Error Helper displays its analysis"
         },
-        "jupyterAiFeedback.chatTemplateId": {
-          "type": "string",
-          "default": "error_chat",
-          "description": "Template ID to use for Error Helper chat conversations (fetched from GitHub repository)"
+        "jupyterAiFeedback.errorHelper.alwaysShow": {
+          "type": "boolean",
+          "default": false,
+          "description": "Always show Error Helper button, even when there are no errors in the cell",
+          "order": 15
         },
         "jupyterAiFeedback.feedbackMode": {
           "type": "string",
@@ -176,10 +177,6 @@
       {
         "command": "jupyterAiFeedback.selectTemplate",
         "title": "choose Prompt template"
-      },
-      {
-        "command": "jupyterAiFeedback.selectChatTemplate",
-        "title": "Choose Chat Template"
       },
       {
         "command": "jupyterAiFeedback.syncGitRepo",
