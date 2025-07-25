@@ -983,46 +983,11 @@ function extractErrorMessage(test: any): string {
   return `${testName} ${outcome}`;
 }
 
-// Helper function: Extract expected value
-function extractExpectedValue(errorMessage: string): string {
-  const patterns = [
-    /should return (\d+)/i,      // "should return 5"
-    /should be (\d+)/i,          // "should be 5"
-    /expected (\d+)/i,           // "expected 5"
-    /assert \d+ == (\d+)/i,      // "assert 0 == 5"
-    /Expected:\s*(\d+)/i,        // "Expected: 5"
-    /expected\s+([^,\n]+)/i,     // "expected True"
-    /should be\s+([^,\n]+)/i,    // "should be True"
-  ];
-
-  for (const pattern of patterns) {
-    const match = errorMessage.match(pattern);
-    if (match) {
-      return match[1].trim();
-    }
-  }
-
-  return '';
-}
-
-// Helper function: Extract actual value
-function extractActualValue(errorMessage: string): string {
-  const patterns = [
-    /but got (\d+)/i,            // "but got 0"
-    /got (\d+)/i,                // "got 0"
-    /assert (\d+) == \d+/i,      // "assert 0 == 5"
-    /Actual:\s*(\d+)/i,          // "Actual: 0"
-    /got\s+([^,\n]+)/i,          // "got False"
-    /returned\s+([^,\n]+)/i,     // "returned False"
-  ];
-
-  for (const pattern of patterns) {
-    const match = errorMessage.match(pattern);
-    if (match) {
-      return match[1].trim();
-    }
-  }
-
+// Helper function: Extract test input from assertion message
+function extractTestInput(assertionMsg: string): string {
+  // 匹配 func(args) 形式，支持多参数、负数、小数、字符串、列表等
+  const m = assertionMsg.match(/([a-zA-Z_][a-zA-Z0-9_]*)\(([^\)]*)\)/);
+  if (m) return `${m[1]}(${m[2]})`;
   return '';
 }
 
@@ -1080,31 +1045,18 @@ function generateConciseTestSummary(failedTests: any[], totalTests: number): str
 
   // Extract test cases with expected vs actual values and assertion message
   const testCases = [];
-  const seen = new Set<string>();
 
   for (const test of failedTests) {
     const testName = test.nodeid.split('::').pop() || 'Unknown Test';
     const errorMessage = extractErrorMessage(test);
     console.log('errorMessage', errorMessage);
-    const expectedValue = extractExpectedValue(errorMessage) || '—';
-    const actualValue = extractActualValue(errorMessage) || '—';
-    // Try to extract input parameter from test name or error message
-    let inputParam = '';
-    const inputMatch = errorMessage.match(/\((\-?\d+)\)/);
-    if (inputMatch) {
-      inputParam = inputMatch[1];
-    }
-    // Unique pattern: expected/actual/line
-    const pattern = `${expectedValue}/${actualValue}/${test.line ?? ''}`;
-    if (seen.has(pattern)) continue;
-    seen.add(pattern);
     // Use the new assertion line extractor
     const assertionLine = extractAssertionLine(test);
+    const inputParam = extractTestInput(assertionLine);
+
     testCases.push({
       test: testName,
       input: inputParam,
-      expected: expectedValue,
-      actual: actualValue,
       assertion: assertionLine
     });
     if (testCases.length === 3) break;
@@ -1116,10 +1068,10 @@ function generateConciseTestSummary(failedTests: any[], totalTests: number): str
 
   if (testCases.length > 0) {
     summary += `### Failure Examples\n`;
-    summary += `| Test | Input | Expected | Actual | Assertion Message |\n`;
-    summary += `|------|-------|----------|--------|-------------------|\n`;
+    summary += `| Test | Input | Assertion Message |\n`;
+    summary += `|------|-------|-------------------|\n`;
     for (const t of testCases) {
-      summary += `| ${t.test} | ${t.input} | ${t.expected} | ${t.actual} | ${t.assertion} |\n`;
+      summary += `| ${t.test} | ${t.input} | ${t.assertion} |\n`;
     }
     summary += `\n`;
   }
@@ -1752,9 +1704,6 @@ ${feedback}
             'Please configure jupyterAiFeedback.apiUrl, apiKey, and modelName in settings'
           );
         }
-
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0].uri.fsPath || '';
-
         // Get code from cell
         const code = cell.document.getText();
 
@@ -1814,12 +1763,6 @@ ${feedback}
             const passed = testResult.report.tests.filter((t: any) => t.outcome === 'passed').length;
             const failed = total - passed;
 
-            // analysis += `## Test Results Overview\n`;
-            // analysis += `- **Total Tests:** ${total}\n`;
-            // analysis += `- **Passed:** ${passed} \n`;
-            // analysis += `- **Failed:** ${failed} \n`;
-            // analysis += `- **Success Rate:** ${Math.round((passed / total) * 100)}%\n\n`;
-
             if (failed > 0) {
               analysis += `## Failed Test Details\n\n`;
               const failedTests = testResult.report.tests.filter((t: any) => t.outcome === 'failed');
@@ -1844,7 +1787,7 @@ ${feedback}
               analysis += `Hidden tests could not be run due to a code execution or syntax error.\n`;
             } else {
               analysis += `## Test Results\n`;
-              analysis += `- All ${total} tests passed! ✅\n\n`;
+              analysis += `- All ${total} tests passed!\n\n`;
             }
           } else {
             analysis += `## Test Execution Issues\n`;
@@ -1936,7 +1879,6 @@ ${feedback}
           console.log('Model Name:', modelName);
           console.log('Is OpenAI Endpoint:', isOpenAIEndpoint);
           console.log('Request Body:', JSON.stringify(body, null, 2));
-
           console.log('=== End API Request Debug ===');
 
           const resp = await axios.post(
@@ -1989,13 +1931,6 @@ ${feedback}
           console.log('feedback:', feedback)
 
         } catch (e: any) {
-          console.error('=== API Error Debug ===');
-          console.error('Error:', e);
-          console.error('Error Response:', e.response?.data);
-          console.error('Error Status:', e.response?.status);
-          console.error('Error Headers:', e.response?.headers);
-          console.error('=== End API Error Debug ===');
-
           let errorMessage = 'AI API call failed: ' + e.message;
           if (e.response?.data) {
             errorMessage += '\nResponse: ' + JSON.stringify(e.response.data, null, 2);
