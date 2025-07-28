@@ -2192,24 +2192,51 @@ ${feedback}
     await vscode.workspace.applyEdit(edit);
   }
 
-  function cleanMarkdown(text:string):string{
+  function cleanMarkdown(text: string): string {
     let cleaned = text;
 
     // Complete unmatched markdown symbols
-    const count = (str: string) => (cleaned.match(new RegExp(str, 'g')) || []).length;
+    const count = (str: string) => (cleaned.match(new RegExp(str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
+    
+    // Fix unmatched ** first (most important for your use case)
     if (count('\\*\\*') % 2 !== 0) cleaned += '**';
-    if ((count('\\*') - 2 * count('\\*\\*')) % 2 !== 0) cleaned += '*';
+    
+    // Then fix single * (excluding those that are part of **)
+    const singleStarCount = count('\\*') - 2 * count('\\*\\*');
+    if (singleStarCount % 2 !== 0) cleaned += '*';
+    
+    // Fix unmatched backticks
     if (count('`') % 2 !== 0) cleaned += '`';
 
     // Ensure headings start on a new line
-    cleaned = cleaned.replace(/(##\\s.*?)(?=\\S)/g, '\n$1');
+    cleaned = cleaned.replace(/(##\s.*?)(?=\S)/g, '\n$1');
 
-    // Remove unnecessary backslashes
-    cleaned = cleaned.replace(/\\([a-zA-Z])/g, '$1');
-    cleaned = cleaned.replace(/\\\\n/g, '\n');
+    // More careful backslash removal - only remove obvious escapes
+    // Avoid touching ** patterns
+    cleaned = cleaned.replace(/\\([_`#])/g, '$1');  // Remove \\ from _ ` # but NOT *
+    cleaned = cleaned.replace(/\\n/g, '\n');
 
     return cleaned.trim();
-  }
+}
+
+  // function cleanMarkdown(text:string):string{
+  //   let cleaned = text;
+
+  //   // Complete unmatched markdown symbols
+  //   const count = (str: string) => (cleaned.match(new RegExp(str, 'g')) || []).length;
+  //   if (count('\\*\\*') % 2 !== 0) cleaned += '**';
+  //   if ((count('\\*') - 2 * count('\\*\\*')) % 2 !== 0) cleaned += '*';
+  //   if (count('`') % 2 !== 0) cleaned += '`';
+
+  //   // Ensure headings start on a new line
+  //   cleaned = cleaned.replace(/(##\\s.*?)(?=\\S)/g, '\n$1');
+
+  //   // Remove unnecessary backslashes
+  //   cleaned = cleaned.replace(/\\([a-zA-Z])/g, '$1');
+  //   cleaned = cleaned.replace(/\\\\n/g, '\n');
+
+  //   return cleaned.trim();
+  // }
 
   // Markdown cell
   ctx.subscriptions.push(
@@ -2260,7 +2287,7 @@ ${feedback}
             return vscode.window.showErrorMessage('Please select the sentence you want explained.')
           }
           inputText = selectedText;
-          header =  `**🤖 Explanation for:** _"${selectedText}"_`
+          header =  `**🤖Explanation** for:**_"${selectedText}"_**`
         } else {
           return vscode.window.showErrorMessage(`Unsupported mode: ${mode}`);
         }
@@ -2306,17 +2333,42 @@ ${feedback}
           });
 
           let accumulated = '';
+          let chunkCount = 0;
           for await (const chunk of resp.data) {
-            const line = chunk.toString().trim();
-            const match = line.match(/"response":"(.*?)"/);
-            if (match) {
-              const delta = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
-              accumulated += delta;
-
-              const safeText = cleanMarkdown(accumulated);
-              const updatedContent = `${header}\n\n${safeText.replace(/\n/g, '  \n')}\n\n${generatingNote}`;
-              await replaceCellContent(doc,updatedContent);
+            chunkCount++;
+            const lines = chunk.toString().split('\n');
+            
+            for (const line of lines) {
+              const trimmedLine = line.trim();
+              if (!trimmedLine) continue;
+              
+              try {
+                const jsonResponse = JSON.parse(trimmedLine);
+                if (jsonResponse.response) {
+                  accumulated += jsonResponse.response;
+                  
+                  const safeText = cleanMarkdown(accumulated);
+                  const updatedContent = `${header}\n\n${safeText.replace(/\n/g, '  \n')}\n\n${generatingNote}`;
+                  await replaceCellContent(doc, updatedContent);
+                }
+              } catch (parseError) {
+                // Skip invalid JSON lines, which is normal in streaming responses
+                console.warn('Skipping invalid JSON line:', trimmedLine);
+              }
             }
+
+          // let accumulated = '';
+          // for await (const chunk of resp.data) {
+          //   const line = chunk.toString().trim();
+          //   const match = line.match(/"response":"(.*?)"/);
+          //   if (match) {
+          //     const delta = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+          //     accumulated += delta;
+
+          //     const safeText = cleanMarkdown(accumulated);
+          //     const updatedContent = `${header}\n\n${safeText.replace(/\n/g, '  \n')}\n\n${generatingNote}`;
+          //     await replaceCellContent(doc,updatedContent);
+          //   }
           }
 
           // give a sign that it is finished generating
