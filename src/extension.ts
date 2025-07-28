@@ -2227,6 +2227,8 @@ ${feedback}
           return;
         }
 
+
+
         const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
         const mode = cfg.get<string>('feedbackMode');
         const apiUrl = cfg.get<string>('apiUrl') || '';
@@ -2238,23 +2240,39 @@ ${feedback}
           );
         }
 
+        const fullText = cell.document.getText();
+
+        // full text or select sentences
+        let inputText = '';
+        let header = '';
+        if (mode === 'Expand') {
+          inputText = fullText;
+          header = `**🤖 Feedback Expansion**`;
+        } else if (mode === 'Explain') {
+          // select sentences
+          const activeEditor = vscode.window.activeTextEditor;
+          const selection = activeEditor?.selection;
+          const selectedText = selection && !selection.isEmpty
+            ? activeEditor.document.getText(selection)
+            : null;
+
+          if (!selectedText || selectedText.trim().length === 0) {
+            return vscode.window.showErrorMessage('Please select the sentence you want explained.')
+          }
+          inputText = selectedText;
+          header =  `**🤖 Explanation for:** _"${selectedText}"_`
+        } else {
+          return vscode.window.showErrorMessage(`Unsupported mode: ${mode}`);
+        }
+
         await syncGitRepo()
         const promptTpl = await getPromptContent(mode);
 
-        const prompt = promptTpl.replace('{{content}}', content);
-        const title = mode === 'Expand' ? 'Feedback Expansion' : 'Explanation';
-
-        const body = {
-          model : modelName,
-          prompt: prompt,
-          stream : true
-        };
-
-        const header = `**🤖${title}**`;
+        const prompt = promptTpl.replace('{{content}}', inputText);
         const generatingNote = `*(Generating...)*`;
         const finishedNote = `**✅ AI Generation Completed**`;
 
-        // modify markdown cell
+        // add or renew markdown cell
         let newCell: vscode.NotebookCell;
         const nextIndex = cell.index + 1;
 
@@ -2273,6 +2291,12 @@ ${feedback}
         await replaceCellContent(doc, `${header}\n\n${generatingNote}\n`);
 
         try {
+          const body = {
+            model : modelName,
+            prompt: prompt,
+            stream : true
+          };
+
           const resp = await axios.post(apiUrl, body, {
             headers: {
               'content-Type' : 'application/json',
@@ -2347,28 +2371,38 @@ ${feedback}
       <head>
         <meta charset="UTF-8">
         <style>
+          *{
+            box-sizing: border-box;
+          }
+
           body {
             margin: 0;
             padding: 0;
-            font-family: sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             height: 100vh;
             display: flex;
             flex-direction: column;
+            background: #f9fafb;
+            color: #1f2937;
           }
 
           #chat {
             flex: 1;
             overflow-y: auto;
-            padding: 1em;
+            padding: 1.2em;
+            display:flex;
+            flex-direction: column;
             background: #f4f4f4;
           }
 
           .message {
             max-width: 80%;
-            margin: 0.5em 0;
             padding: 0.75em 1em;
-            border-radius: 10px;
-            line-height: 1.4;
+            border-radius: 12px;
+            line-height: 1.6;
+            white-space:pre-wrap;
+            word-wrap:break-word;
+            font-size:0.95em;
           }
 
           .user {
@@ -2380,39 +2414,102 @@ ${feedback}
           .assistant {
             background-color: #ffffff;
             align-self: flex-start;
-            border: 1px solid #ccc;
+            border: 1px solid #e5e7eb;
           }
 
           #inputArea {
             display: flex;
-            padding: 0.5em;
-            border-top: 1px solid #ccc;
-            background: #fff;
+            padding: 0.75em;
+            border-top: 1px solid #e5e7eb;
+            background: #ffffff;
           }
 
           #input {
             flex: 1;
-            padding: 0.5em;
+            padding: 0.6em 0.75em;
             font-size: 1em;
-            border: 1px solid #ccc;
-            border-radius: 5px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            outline:none;
+            resize:none;
+            min-height:2.4em;
           }
 
-          button {
+          #sendBtn {
             margin-left: 0.5em;
-            padding: 0.5em 1em;
+            padding: 0.6em 1.2em;
             font-size: 1em;
+            border: none;
+            border-radius: 8px;
+            background-color: #2563eb;
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.2s;
           }
+
+          #sendBtn:hover {
+            background-color: #1d4ed8;
+          }
+
+          p {
+            margin: 0.05em 0;
+            line-height: 1.5;
+          }
+
+          ul {
+            margin-top: 0.3em;
+            margin-bottom: 0.3em;
+            padding-left: 1.2em;
+          }
+
+          li {
+            margin: 0.2em 0;
+          }
+
+          #suggestedArea {
+            padding: 0.5em 1em;
+            background: #f9f9f9;
+            border-top: 1px solid #ddd;
+            border-bottom: 1px solid #ddd;
+          }
+
+          #suggestedButtons {
+            margin-top: 0.4em;
+          }
+
+          .suggestion-btn {
+            margin: 0.2em 0.4em 0 0;
+            padding: 0.3em 0.8em;
+            border: 1px solid #bbb;
+            border-radius: 6px;
+            background-color: #f0f0f0;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+          }
+
+          .suggestion-btn:hover {
+            background-color: #e0e0e0;
+          }
+
         </style>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
       </head>
       <body>
         <div id="chat"></div>
 
+        <div id='suggestedArea'>
+          <strong>💡 Suggested follow-up:</strong><br>
+          <div id="suggestedButtons"></div>
+        </div>
+
         <div id="inputArea">
           <input id="input" placeholder="Type your follow-up question..." />
           <button id="sendBtn">Send</button>
         </div>
+
+        <div id="loadingStatus" style="margin-top: 0.5em; font-size: 0.9em; color: #555;"></div>
+
 
         <script>
           const vscode = acquireVsCodeApi();
@@ -2422,28 +2519,82 @@ ${feedback}
             const div = document.createElement('div');
             div.className = 'message ' + role;
             const label = role === 'user' ? '👤 You' : '🤖 AI';
+
             const rendered = role === 'assistant' ? marked.parse(content) : content;
             div.innerHTML = '<strong>' + label + ':</strong><br>' + rendered;
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
           }
 
-          document.getElementById('sendBtn').addEventListener('click', () => {
+          function showSuggestedQuestions(questions) {
+            const container = document.getElementById('suggestedButtons');
+            container.innerHTML = '';
+            questions.forEach(text => {
+              const btn = document.createElement('button');
+              btn.textContent = text;
+              btn.className = 'suggestion-btn';
+              btn.addEventListener('click', () => {
+                appendMessage('user', text);
+
+                // loading status
+                const button = document.getElementById('sendBtn');
+                const loading = document.getElementById('loadingStatus');
+                button.disabled = true;
+                button.textContent = 'Sending...';
+                loading.textContent = '🤖 Generating response...';
+
+                vscode.postMessage({ type: 'ask', question: text });
+              });
+              container.appendChild(btn);
+            });
+          }
+
+          function sendMessage() {
             const input = document.getElementById('input');
             const question = input.value.trim();
+            const button = document.getElementById('sendBtn');
+            const loading = document.getElementById('loadingStatus');
             if (question) {
               appendMessage('user', question);
+
+              // show loading status
+              button.disabled = true;
+              button.textContent = 'Sending...';
+              loading.textContent = '🤖 Generating response...';
+
               vscode.postMessage({ type: 'ask', question });
               input.value = '';
+              }
+          }
+
+          document.getElementById('input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
             }
           });
+
+          document.getElementById('sendBtn').addEventListener('click', sendMessage);
 
           window.addEventListener('message', event => {
             const msg = event.data;
             if (msg.type === 'answer') {
               appendMessage('assistant', msg.content);
+
+              const button = document.getElementById('sendBtn');
+              button.disabled = false;
+              button.textContent = 'Send';
+
+              const loading = document.getElementById('loadingStatus');
+              loading.textContent = '';
             }
           });
+
+          showSuggestedQuestions([
+            'What does this mean in practice?',
+            'Can you give an example?',
+            'How can I apply this idea?'
+          ]);         
         </script>
       </body>
       </html>`;
@@ -2459,6 +2610,7 @@ ${feedback}
           const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
           const apiUrl = cfg.get<string>('apiUrl') || '';
           const apiKey = cfg.get<string>('apiKey') || '';
+          const modelName = cfg.get<string>('modelName') || '';
 
           //const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
           const fullPrompt = conversation
@@ -2467,7 +2619,7 @@ ${feedback}
             .join('\n') + '\nAssistant:';
 
           const body = {
-            model: 'gemma3:27b',
+            model: modelName,
             prompt: fullPrompt,
             stream: false
           };
@@ -2498,21 +2650,33 @@ ${feedback}
     provideCellStatusBarItems(cell, _token) {
       const items: vscode.NotebookCellStatusBarItem[] = [];
 
-      if (
-        cell.kind === vscode.NotebookCellKind.Markup &&
-        cell.document.getText().includes('**🤖Explanation**')
-      ) {
-        const item = new vscode.NotebookCellStatusBarItem(
-          '💬 Ask follow-up question',
-          vscode.NotebookCellStatusBarAlignment.Right
-        );
-        item.command = 'jupyterAiFeedback.askFollowUpFromButton';
-        item.tooltip = 'Ask a follow-up question about this explanation';
-        items.push(item);
-      }
+      if (cell.kind === vscode.NotebookCellKind.Markup) {
+        const text = cell.document.getText();
 
-      return items;
+        // Explanation cell
+        if (text.includes('**🤖Explanation** for:')) {
+          const item = new vscode.NotebookCellStatusBarItem(
+            '💬 Ask follow-up',
+            vscode.NotebookCellStatusBarAlignment.Right
+          );
+          item.command = 'jupyterAiFeedback.askFollowUpFromButton';
+          item.tooltip = 'Ask a follow-up question about this explanation';
+          items.push(item);
+        };
+
+        // Feeback Expansion cell
+        if (text.includes('**🤖Feedback Expansion**')){
+          const item = new vscode.NotebookCellStatusBarItem(
+            '💬 Ask follow-up',
+            vscode.NotebookCellStatusBarAlignment.Right
+          );
+          item.command = 'jupyterAiFeedback.askFollowUpFromButton';
+          item.tooltip = 'Ask a follow-up question about this explanation';
+          items.push(item);
         }
+      }
+      return items;
+    }
     })
   );
 }
