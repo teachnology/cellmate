@@ -2219,25 +2219,6 @@ ${feedback}
     return cleaned.trim();
 }
 
-  // function cleanMarkdown(text:string):string{
-  //   let cleaned = text;
-
-  //   // Complete unmatched markdown symbols
-  //   const count = (str: string) => (cleaned.match(new RegExp(str, 'g')) || []).length;
-  //   if (count('\\*\\*') % 2 !== 0) cleaned += '**';
-  //   if ((count('\\*') - 2 * count('\\*\\*')) % 2 !== 0) cleaned += '*';
-  //   if (count('`') % 2 !== 0) cleaned += '`';
-
-  //   // Ensure headings start on a new line
-  //   cleaned = cleaned.replace(/(##\\s.*?)(?=\\S)/g, '\n$1');
-
-  //   // Remove unnecessary backslashes
-  //   cleaned = cleaned.replace(/\\([a-zA-Z])/g, '$1');
-  //   cleaned = cleaned.replace(/\\\\n/g, '\n');
-
-  //   return cleaned.trim();
-  // }
-
   // Markdown cell
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
@@ -2356,19 +2337,6 @@ ${feedback}
                 console.warn('Skipping invalid JSON line:', trimmedLine);
               }
             }
-
-          // let accumulated = '';
-          // for await (const chunk of resp.data) {
-          //   const line = chunk.toString().trim();
-          //   const match = line.match(/"response":"(.*?)"/);
-          //   if (match) {
-          //     const delta = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
-          //     accumulated += delta;
-
-          //     const safeText = cleanMarkdown(accumulated);
-          //     const updatedContent = `${header}\n\n${safeText.replace(/\n/g, '  \n')}\n\n${generatingNote}`;
-          //     await replaceCellContent(doc,updatedContent);
-          //   }
           }
 
           // give a sign that it is finished generating
