@@ -88,6 +88,11 @@
             "Explain the feedback in simpler terms"
           ],
           "description": "Choose how the feedback will be processed by the AI"
+        },
+        "jupyterAiFeedback.showButtonInAllMarkdown":{
+          "type": "boolean",
+          "default":false,
+          "description": "Show the Expand/Explain button in all markdown cells (not just those containing feedback)"
         }
       }
     },

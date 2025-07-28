@@ -1570,9 +1570,11 @@ export function activate(ctx: vscode.ExtensionContext) {
         items.push(speechItem);
       }
 
+      const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback')
+      const showAll = cfg.get<boolean>('showButtonInAllMarkdown')
       const text = cell.document.getText().toLowerCase()
-      if(cell.kind === vscode.NotebookCellKind.Markup &&
-   (text.includes('**feedback**') || text.includes('**🤖feedback expansion**'))){
+      const containsFeedback = text.includes('**feedback**') || text.includes('**🤖feedback expansion**')
+      if(cell.kind === vscode.NotebookCellKind.Markup && (showAll || containsFeedback)){
         const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
         const mode = cfg.get<string>('feedbackMode');
 
