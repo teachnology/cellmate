@@ -1,11 +1,15 @@
 {
-  "name": "vscode-jupyter-ai-feedback",
-  "publisher": "cellmate-team",
-  "displayName": "Jupyter AI Feedback",
-  "description": "为 .ipynb 每个 Python cell 添加 AI Feedback 按钮，发送代码并展示模型反馈。",
+  "name": "cellmate",
+  "publisher": "CellMate",
+  "displayName": "CellMate",
+  "description": "Our team created an AI-powered feedback system for Jupyter Notebooks, enhancing student learning with AI-driven insights and support. the plugin contains a speech-to-text feature, an explain and expand feature, an error helper, and an AI-feedback button.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/teachnology/cellmate/tree/main"
+  },
   "version": "0.1.0",
   "engines": {
-    "vscode": "^1.60.0"
+    "vscode": "^1.75.0"
   },
   "activationEvents": [
     "onNotebook:*"
@@ -52,7 +56,7 @@
         },
         "jupyterAiFeedback.templateId": {
           "type": "string",
-          "default": "Standard Python Feedback",
+          "default": "standard_feedback",
           "description": "Template ID to use for AI feedback (fetched from GitHub repository)"
         },
         "jupyterAiFeedback.useHiddenTests": {
