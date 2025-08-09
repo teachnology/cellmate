@@ -1671,30 +1671,6 @@ ${feedback}
     cleaned = cleaned.replace(/\\n/g, '\n');
 
     return cleaned.trim();
-//     let cleaned = text;
-
-//     // Complete unmatched markdown symbols
-//     const count = (str: string) => (cleaned.match(new RegExp(str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-    
-//     // Fix unmatched ** first (most important for your use case)
-//     if (count('\\*\\*') % 2 !== 0) cleaned += '**';
-    
-//     // Then fix single * (excluding those that are part of **)
-//     const singleStarCount = count('\\*') - 2 * count('\\*\\*');
-//     if (singleStarCount % 2 !== 0) cleaned += '*';
-    
-//     // Fix unmatched backticks
-//     if (count('`') % 2 !== 0) cleaned += '`';
-
-//     // Ensure headings start on a new line
-//     cleaned = cleaned.replace(/(##\s.*?)(?=\S)/g, '\n$1');
-
-//     // More careful backslash removal - only remove obvious escapes
-//     // Avoid touching ** patterns
-//     cleaned = cleaned.replace(/\\([_`#])/g, '$1');  // Remove \\ from _ ` # but NOT *
-//     cleaned = cleaned.replace(/\\n/g, '\n');
-
-//     return cleaned.trim();
 }
 
   // Markdown cell
