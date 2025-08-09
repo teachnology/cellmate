@@ -41,6 +41,27 @@ npm run compile
 3. **Click bottom**: Click the AI feedback bottom
 4. **View Feedback**: The extension will automatically generate feedback and insert it into the notebook
 
+### Expand / Explain and Follow-up Questions
+
+Cellmate provides additional interactive AI tools to help you better understand or refine your work.
+
+#### Expand / Explain Button
+- This button can be configured to appear **only in feedback Markdown cells** or **in all Markdown cells**.
+- You can select the working mode in VS Code settings:
+  - **Expand Mode**: Expand the summary of feedback with more detail, examples, or deeper reasoning.
+  - **Explain Mode**: Explains and clarifies selected text or sentence.
+    - In Explain Mode, select a portion of text in a Markdown cell and click the **Explain** button.
+    - A new *Explanation* Markdown cell will be inserted below, containing the explanation of the selected text.
+
+#### Ask Follow-up Button
+- **Where it appears**: In both *Feedback* and *Explanation* Markdown cells.
+- **What it does**: Opens a Webview panel where you can have a conversational follow-up with the AI.
+- **How to use**:
+  1. Click **Ask Follow-up**.
+  2. Type your question in the Webview panel.
+  3. The AI will respond in real-time.
+
+
 ## 🔧 Configuration
 ### LLM Configuration
 

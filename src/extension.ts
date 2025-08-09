@@ -1646,25 +1646,28 @@ ${feedback}
   function cleanMarkdown(text: string): string {
     let cleaned = text;
 
-    // Complete unmatched markdown symbols
+    // 删除大模型常见的多余短语（即使已提示也会生成）
+    cleaned = cleaned.replace(/^.*?(Expanded Feedback|Feedback Expansion|Here.*feedback|Based on.*feedback).*$/gmi, '');
+    
+    // 删除多余的空行
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+    // 补全未配对的 markdown 符号
     const count = (str: string) => (cleaned.match(new RegExp(str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
     
-    // Fix unmatched ** first (most important for your use case)
+    // 优先修复未配对的 **（对你的用例最重要）
     if (count('\\*\\*') % 2 !== 0) cleaned += '**';
     
-    // Then fix single * (excluding those that are part of **)
+    // 然后修复单个 *（排除属于 ** 的部分）
     const singleStarCount = count('\\*') - 2 * count('\\*\\*');
     if (singleStarCount % 2 !== 0) cleaned += '*';
     
-    // Fix unmatched backticks
+    // 修复未配对的反引号 `
     if (count('`') % 2 !== 0) cleaned += '`';
 
-    // Ensure headings start on a new line
-    cleaned = cleaned.replace(/(##\s.*?)(?=\S)/g, '\n$1');
-
-    // More careful backslash removal - only remove obvious escapes
-    // Avoid touching ** patterns
-    cleaned = cleaned.replace(/\\([_`#])/g, '$1');  // Remove \\ from _ ` # but NOT *
+    // 更谨慎地去除反斜杠，只去除明显的转义
+    // 不处理 ** 相关的模式
+    cleaned = cleaned.replace(/\\([_`#])/g, '$1');  // 只去除 _ ` # 前的反斜杠，不处理 *
     cleaned = cleaned.replace(/\\n/g, '\n');
 
     return cleaned.trim();
@@ -1792,7 +1795,12 @@ ${feedback}
 
           // give a sign that it is finished generating
           const finalText = cleanMarkdown(accumulated);
-          const finalContent = `${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n${finishedNote}`;
+
+          // Add colored border based on mode, wrapping both header and content
+          const borderColor = mode === 'Expand' ? '#6ec5d2ff' : '#4CAF50';
+          const wrappedContent = `<div style="border: 3px solid ${borderColor}; padding: 10px">\n\n${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n</div>`;
+          
+          const finalContent = `${wrappedContent}\n`;
           await replaceCellContent(doc,finalContent);
 
         } catch (e:any) {
@@ -1825,8 +1833,6 @@ ${feedback}
       } catch(e:any){
         vscode.window.showErrorMessage('⚠️ Failed to load Followup prompt: ' + e.message);
       }
-
-      conversation.push({role:'assistant', content:explanation});
 
       const panel = vscode.window.createWebviewPanel(
         'followUpChat',
@@ -1864,6 +1870,7 @@ ${feedback}
             display:flex;
             flex-direction: column;
             background: #f4f4f4;
+            max-width: 900px; 
           }
 
           .message {
@@ -1888,6 +1895,57 @@ ${feedback}
             border: 1px solid #e5e7eb;
           }
 
+          /* 防溢出优化 */
+          .message code {
+            white-space: pre-wrap;
+            word-break: break-word;
+          }
+          .message pre {
+            white-space: pre;
+            overflow-x: auto;
+            max-width: 100%;
+          }
+          .message img {
+            max-width: 100%;
+            height: auto;
+          }
+          .message table {
+            display: block;
+            width: 100%;
+            overflow-x: auto;
+          }
+          .message th, .message td {
+            word-break: break-word;
+          }
+
+          /* 紧凑 Markdown 样式 */
+          .message.assistant p {
+            margin: 0.2em 0;
+            line-height: 1.4;
+          }
+          .message.assistant ul,
+          .message.assistant ol {
+            margin: 0.2em 0;
+            padding-left: 1.2em;
+          }
+          .message.assistant li {
+            margin: 0.15em 0;
+          }
+          .message.assistant h1,
+          .message.assistant h2,
+          .message.assistant h3 {
+            margin: 0.4em 0 0.2em;
+            line-height: 1.3;
+          }
+          .message.assistant table {
+            border-collapse: collapse;
+            margin: 0.3em 0;
+          }
+          .message.assistant th,
+          .message.assistant td {
+            padding: 4px 8px;
+          }
+
           #inputArea {
             display: flex;
             padding: 0.75em;
@@ -1902,8 +1960,9 @@ ${feedback}
             border: 1px solid #d1d5db;
             border-radius: 8px;
             outline:none;
-            resize:none;
-            min-height:2.4em;
+            resize: vertical;
+            min-height: 2.8em;
+            max-height: 40vh;
           }
 
           #sendBtn {
@@ -1925,16 +1984,6 @@ ${feedback}
           p {
             margin: 0.05em 0;
             line-height: 1.5;
-          }
-
-          ul {
-            margin-top: 0.3em;
-            margin-bottom: 0.3em;
-            padding-left: 1.2em;
-          }
-
-          li {
-            margin: 0.2em 0;
           }
 
           #suggestedArea {
@@ -1963,6 +2012,7 @@ ${feedback}
             background-color: #e0e0e0;
           }
 
+          
         </style>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
       </head>
@@ -1975,11 +2025,11 @@ ${feedback}
         </div>
 
         <div id="inputArea">
-          <input id="input" placeholder="Type your follow-up question..." />
+          <textarea id="input" placeholder="Type your follow-up question..." /></textarea>
           <button id="sendBtn">Send</button>
         </div>
 
-        <div id="loadingStatus" style="margin-top: 0.5em; font-size: 0.9em; color: #555;"></div>
+        
 
 
         <script>
@@ -2009,10 +2059,10 @@ ${feedback}
 
                 // loading status
                 const button = document.getElementById('sendBtn');
-                const loading = document.getElementById('loadingStatus');
+      
                 button.disabled = true;
-                button.textContent = 'Sending...';
-                loading.textContent = '🤖 Generating response...';
+                button.textContent = 'Thinking...';
+                
 
                 vscode.postMessage({ type: 'ask', question: text });
               });
@@ -2024,14 +2074,13 @@ ${feedback}
             const input = document.getElementById('input');
             const question = input.value.trim();
             const button = document.getElementById('sendBtn');
-            const loading = document.getElementById('loadingStatus');
             if (question) {
               appendMessage('user', question);
 
               // show loading status
               button.disabled = true;
-              button.textContent = 'Sending...';
-              loading.textContent = '🤖 Generating response...';
+              button.textContent = 'Thinking...';
+              
 
               vscode.postMessage({ type: 'ask', question });
               input.value = '';
@@ -2055,9 +2104,6 @@ ${feedback}
               const button = document.getElementById('sendBtn');
               button.disabled = false;
               button.textContent = 'Send';
-
-              const loading = document.getElementById('loadingStatus');
-              loading.textContent = '';
             }
           });
 
@@ -2083,11 +2129,25 @@ ${feedback}
           const apiKey = cfg.get<string>('apiKey') || '';
           const modelName = cfg.get<string>('modelName') || '';
 
-          //const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
-          const fullPrompt = conversation
-            .filter(msg => msg.role !== 'followup')
-            .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
-            .join('\n') + '\nAssistant:';
+          // //const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
+          // const fullPrompt = conversation
+          //   .filter(msg => msg.role !== 'followup')
+          //   .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
+          //   .join('\n') + '\nAssistant:';
+
+          const mapRole = (r: 'user' | 'assistant' | 'followup'): 'User' | 'Assistant' | 'System' => {
+            if (r === 'user') return 'User';
+            if (r === 'followup') return 'System';
+            return 'Assistant';
+          };
+
+          const lines: string[] = [];
+          for (const m of conversation) {
+            // 不再过滤 followup，而是当作 System
+            const role = mapRole(m.role as any);
+            lines.push(`${role}: ${m.content}`);
+          }
+          const fullPrompt = lines.join('\n') + '\nAssistant:';
 
           const body = {
             model: modelName,
@@ -2110,6 +2170,7 @@ ${feedback}
             panel.webview.postMessage({type: 'answer', content:answer});
           } catch (e: any) {
             vscode.window.showErrorMessage('Failed to fetch follow-up response: ' + e.message);
+            panel.webview.postMessage({ type: 'answer', content: `❌ Request failed: ${e.message || e}` });
           }
         }
       });
