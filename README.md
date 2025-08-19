@@ -41,6 +41,56 @@ npm run compile
 3. **Click bottom**: Click the AI feedback bottom
 4. **View Feedback**: The extension will automatically generate feedback and insert it into the notebook
 
+### Error Helper and Error Chat
+
+- **Error Helper**: Automatically analyzes Python errors and provides targeted debugging guidance without giving away answers. 
+
+  When problem description is provided, considers both the error and problem requirements. To include problem just simply mark your problem description:
+
+  ```markdown
+  <!-- prompt:problem_description -->
+  Calculate the nth Fibonacci number recursively
+  ```
+  Or in code cells:
+  ```python
+  # prompt:problem_description
+  # Calculate the nth Fibonacci number recursively
+  ```
+
+- **Error Chat**: Students can ask follow-up questions about errors in a conversational interface after Error Helper's complete analysis.
+
+#### How to Use Error Helper:
+1. **Run Your Code**: Execute a Python cell that produces an error.
+2. **Click Error Helper Button**: The 🆘 Error Helper button appears when errors are detected. Or set the button to always show in code cell.
+3. **View Analysis**: Get structured feedback including: "What Happened", "Why It Occurred", "How to Fix It", "General Example", "Prevention Tip". Analysis can be displayed as cell output or markdown cell.
+
+#### How to Use Error Chat:
+1. **After Error Analysis**: When Error Helper completes, click "Start Chat" in the popup.
+2. **Or Use Command Palette**: Press `Cmd+Shift+P` (Mac) or `Ctrl+Shift+P` (Windows/Linux) → "Start Error Helper Chat".
+3. **Ask Questions**: Type your questions in the chat panel.
+4. **Get Targeted Help**: Receive feedback based on your error context.
+
+### Expand / Explain and Follow-up Questions
+
+Cellmate provides additional interactive AI tools to help you better understand or refine your work.
+
+#### Expand / Explain Button
+- This button can be configured to appear **only in feedback Markdown cells** or **in all Markdown cells**.
+- You can select the working mode in VS Code settings:
+  - **Expand Mode**: Expand the summary of feedback with more detail, examples, or deeper reasoning.
+  - **Explain Mode**: Explains and clarifies selected text or sentence.
+    - In Explain Mode, select a portion of text in a Markdown cell and click the **Explain** button.
+    - A new *Explanation* Markdown cell will be inserted below, containing the explanation of the selected text.
+
+#### Ask Follow-up Button
+- **Where it appears**: In both *Feedback* and *Explanation* Markdown cells.
+- **What it does**: Opens a Webview panel where you can have a conversational follow-up with the AI.
+- **How to use**:
+  1. Click **Ask Follow-up**.
+  2. Type your question in the Webview panel.
+  3. The AI will respond in real-time.
+
+
 ## 🔧 Configuration
 ### LLM Configuration
 
