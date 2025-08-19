@@ -38,7 +38,7 @@ npm run compile
 
 1. **Open Jupyter Notebook**: Open a `.ipynb` file in VS Code
 2. **Write Code**: Write Python code in code cells
-3. **Click botton**: Click the AI feedback botton
+3. **Click button**: Click the AI feedback button
 4. **View Feedback**: The extension will automatically generate feedback and insert it into the notebook
 
 ### Error Helper and Error Chat
