@@ -51,14 +51,15 @@ class ErrorHelperPanel {
   private messages: ChatMessage[] = [];
   private config: LLMConfig;
   private errorHelperFeedback: string;
+  private problemDescription: string;
 
-  public static createOrShow(extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig, errorHelperFeedback?: string): void {
+  public static createOrShow(extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig, errorHelperFeedback?: string, problemDescription?: string): void {
     const column = vscode.ViewColumn.Two;
 
     // If we already have a panel, show it
     if (ErrorHelperPanel.currentPanel) {
       ErrorHelperPanel.currentPanel.panel.reveal(column);
-      ErrorHelperPanel.currentPanel.updateCell(cell, errorHelperFeedback);
+      ErrorHelperPanel.currentPanel.updateCell(cell, errorHelperFeedback, problemDescription);
       return;
     }
 
@@ -74,15 +75,16 @@ class ErrorHelperPanel {
       }
     );
 
-    ErrorHelperPanel.currentPanel = new ErrorHelperPanel(panel, extensionUri, cell, config, errorHelperFeedback || '');
+    ErrorHelperPanel.currentPanel = new ErrorHelperPanel(panel, extensionUri, cell, config, errorHelperFeedback || '', problemDescription || '');
   }
 
-  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig, errorHelperFeedback: string) {
+  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig, errorHelperFeedback: string, problemDescription: string) {
     this.panel = panel;
     this.extensionUri = extensionUri;
     this.cell = cell;
     this.config = config;
     this.errorHelperFeedback = errorHelperFeedback;
+    this.problemDescription = problemDescription;
 
     // Set the webview's initial html content
     this.update();
@@ -177,6 +179,14 @@ class ErrorHelperPanel {
         prompt = prompt.replace('{{error_helper_feedback}}', '');
       }
 
+      // Handle problem_description
+      if (this.problemDescription && this.problemDescription.trim()) {
+        prompt = prompt.replace('{{problem_description}}', this.problemDescription);
+      } else {
+        prompt = prompt.replace(/\*\*Problem Description:\*\*\s*\{\{problem_description\}\}\s*\n\n?/g, '');
+        prompt = prompt.replace('{{problem_description}}', '');
+      }
+
       return await callLLMAPI(prompt, this.config);
     } catch (error) {
       console.error('Failed to load chat template, using fallback:', error);
@@ -186,19 +196,23 @@ class ErrorHelperPanel {
 
 **Code:** ${code}
 **Error:** ${cellOutput.output}
+${this.problemDescription ? `**Problem Context:** ${this.problemDescription}` : ''}
 ${this.errorHelperFeedback ? `**Previous Analysis:** ${this.errorHelperFeedback}` : ''}
 **Question:** ${userMessage}
 
-Please provide a helpful response based on the code, error${this.errorHelperFeedback ? ', and previous analysis' : ''}.`;
+Please provide a helpful response based on the code, error${this.problemDescription ? ', problem context' : ''}${this.errorHelperFeedback ? ', and previous analysis' : ''}.`;
 
       return await callLLMAPI(fallbackPrompt, this.config);
     }
   }
 
-  public updateCell(cell: vscode.NotebookCell, errorHelperFeedback?: string) {
+  public updateCell(cell: vscode.NotebookCell, errorHelperFeedback?: string, problemDescription?: string): void {
     this.cell = cell;
     if (errorHelperFeedback) {
       this.errorHelperFeedback = errorHelperFeedback;
+    }
+    if (problemDescription !== undefined) {
+      this.problemDescription = problemDescription;
     }
     this.messages = []; // Reset conversation for new cell
     this.update();
@@ -215,10 +229,10 @@ Please provide a helpful response based on the code, error${this.errorHelperFeed
     const code = this.cell.document.getText();
     const cellOutput = getCellOutput(this.cell);
 
-    this.panel.webview.html = this.getHtmlForWebview(code, cellOutput.output, this.errorHelperFeedback);
+    this.panel.webview.html = this.getHtmlForWebview(code, cellOutput.output, this.errorHelperFeedback, this.problemDescription);
   }
 
-  private getHtmlForWebview(code: string, errorOutput: string, errorHelperFeedback: string): string {
+  private getHtmlForWebview(code: string, errorOutput: string, errorHelperFeedback: string, problemDescription: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -299,6 +313,18 @@ Please provide a helpful response based on the code, error${this.errorHelperFeed
             border-radius: 4px;
             padding: 10px;
             border-left: 3px solid var(--vscode-textLink-foreground);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .problem-content {
+            padding: 0 15px 12px;
+            font-size: 12px;
+            background: var(--vscode-editor-inactiveSelectionBackground);
+            margin: 0 15px 12px;
+            border-radius: 4px;
+            padding: 10px;
+            border-left: 3px solid var(--vscode-textLink-activeForeground);
             white-space: pre-wrap;
             word-wrap: break-word;
         }
@@ -474,6 +500,10 @@ Please provide a helpful response based on the code, error${this.errorHelperFeed
     </div>
 
     <div class="context-section">
+        ${problemDescription ? `
+        <div class="context-header">Problem Description</div>
+        <div class="problem-content">${problemDescription}</div>
+        ` : ''}
         <div class="context-header">Code & Error Context</div>
         <div class="context-content">${code}
 
@@ -492,7 +522,7 @@ ${errorOutput}</div>
                 AI Helper
             </div>
             <div>
-                I have your code, error details${errorHelperFeedback ? ', and previous analysis' : ''}. What specific questions do you have about this error?
+                I have your code, error details${problemDescription ? ', problem description' : ''}${errorHelperFeedback ? ', and previous analysis' : ''}. What specific questions do you have about this error?
             </div>
         </div>
     </div>
@@ -1125,9 +1155,45 @@ export function activate(ctx: vscode.ExtensionContext) {
 
           await syncGitRepo();
           const promptContent = await getPromptContent('error_helper');
+          const placeholderKeys = getTemplatePlaceholderKeys(promptContent);
+          const placeholderMap = extractPromptPlaceholders(editor.notebook, cell.index, placeholderKeys);
 
-          let prompt = promptContent.replace('{{code}}', code);
-          prompt = prompt.replace('{{code_output}}', cellOutput.output);
+          placeholderMap.set('code', code);
+          placeholderMap.set('code_output', cellOutput.output);
+
+          const possibleKeys = ['problem_description', 'problem', 'exercise_description', 'task'];
+          let problemDescription = '';
+          
+          for (const key of possibleKeys) {
+            if (placeholderMap.has(key)) {
+              problemDescription = placeholderMap.get(key) || '';
+              if (problemDescription) {
+                console.log(`Found explicitly marked problem description with key: ${key}`);
+                break;
+              }
+            }
+          }
+
+          placeholderMap.set('problem_description', problemDescription);
+
+          let prompt = '';
+          if (problemDescription) {
+            let enhancedPrompt = promptContent.replace(
+              '{{problem_description}}',
+              `**Problem Description:**\n${problemDescription}\n\n` +
+              `**IMPORTANT:** Consider both the error AND the problem requirements when providing guidance. ` +
+              `Ensure your suggestions align with the expected solution approach.`
+            );
+            prompt = fillPromptTemplate(enhancedPrompt, placeholderMap, editor.notebook);
+            console.log('Using enhanced prompt with problem description');
+          } else {
+            let standardPrompt = promptContent.replace('{{problem_description}}', '');
+            prompt = fillPromptTemplate(standardPrompt, placeholderMap, editor.notebook);
+            console.log('Using standard prompt without problem description');
+          }
+          
+          console.log('Problem description found:', problemDescription ? 'Yes' : 'No');
+          console.log('Problem description length:', problemDescription.length);
 
           const feedback = await callLLMAPI(prompt, config);
 
@@ -1146,7 +1212,7 @@ export function activate(ctx: vscode.ExtensionContext) {
             );
 
             if (action === 'Start Chat') {
-              ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, feedback);
+              ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, feedback, problemDescription);
             }
           } else {
             // markdown mode
@@ -1167,7 +1233,7 @@ ${feedback}
             );
 
             if (action === 'Start Chat') {
-              ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, feedback);
+              ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, feedback, problemDescription);
             }
           }
 
@@ -1219,7 +1285,28 @@ ${feedback}
           errorHelperFeedback = findExistingErrorHelperFeedback(cell);
         }
 
-        ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, errorHelperFeedback);
+        const editor = vscode.window.activeNotebookEditor;
+        let problemDescription = '';
+        
+        if (editor) {
+          // Extract placeholders
+          const placeholderKeys = new Set(['problem_description', 'problem', 'exercise_description', 'task']);
+          const placeholderMap = extractPromptPlaceholders(editor.notebook, cell.index, placeholderKeys);
+
+          // Find problem description
+          const possibleKeys = ['problem_description', 'problem', 'exercise_description', 'task'];
+          for (const key of possibleKeys) {
+            if (placeholderMap.has(key)) {
+              problemDescription = placeholderMap.get(key) || '';
+              if (problemDescription) {
+                console.log(`Found problem description with key: ${key} in Start Error Chat`);
+                break;
+              }
+            }
+          }
+        }
+
+        ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, errorHelperFeedback, problemDescription);
       }
     )
   );
@@ -1646,28 +1733,25 @@ ${feedback}
   function cleanMarkdown(text: string): string {
     let cleaned = text;
 
-    // 删除大模型常见的多余短语（即使已提示也会生成）
-    cleaned = cleaned.replace(/^.*?(Expanded Feedback|Feedback Expansion|Here.*feedback|Based on.*feedback).*$/gmi, '');
-    
-    // 删除多余的空行
-    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
-
-    // 补全未配对的 markdown 符号
+    // Complete unmatched markdown symbols
     const count = (str: string) => (cleaned.match(new RegExp(str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
     
-    // 优先修复未配对的 **（对你的用例最重要）
+    // Fix unmatched ** first (most important for your use case)
     if (count('\\*\\*') % 2 !== 0) cleaned += '**';
     
-    // 然后修复单个 *（排除属于 ** 的部分）
+    // Then fix single * (excluding those that are part of **)
     const singleStarCount = count('\\*') - 2 * count('\\*\\*');
     if (singleStarCount % 2 !== 0) cleaned += '*';
     
-    // 修复未配对的反引号 `
+    // Fix unmatched backticks
     if (count('`') % 2 !== 0) cleaned += '`';
 
-    // 更谨慎地去除反斜杠，只去除明显的转义
-    // 不处理 ** 相关的模式
-    cleaned = cleaned.replace(/\\([_`#])/g, '$1');  // 只去除 _ ` # 前的反斜杠，不处理 *
+    // Ensure headings start on a new line
+    cleaned = cleaned.replace(/(##\s.*?)(?=\S)/g, '\n$1');
+
+    // More careful backslash removal - only remove obvious escapes
+    // Avoid touching ** patterns
+    cleaned = cleaned.replace(/\\([_`#])/g, '$1');  // Remove \\ from _ ` # but NOT *
     cleaned = cleaned.replace(/\\n/g, '\n');
 
     return cleaned.trim();
@@ -1795,12 +1879,7 @@ ${feedback}
 
           // give a sign that it is finished generating
           const finalText = cleanMarkdown(accumulated);
-
-          // Add colored border based on mode, wrapping both header and content
-          const borderColor = mode === 'Expand' ? '#6ec5d2ff' : '#4CAF50';
-          const wrappedContent = `<div style="border: 3px solid ${borderColor}; padding: 10px">\n\n${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n</div>`;
-          
-          const finalContent = `${wrappedContent}\n`;
+          const finalContent = `${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n${finishedNote}`;
           await replaceCellContent(doc,finalContent);
 
         } catch (e:any) {
@@ -1833,6 +1912,8 @@ ${feedback}
       } catch(e:any){
         vscode.window.showErrorMessage('⚠️ Failed to load Followup prompt: ' + e.message);
       }
+
+      conversation.push({role:'assistant', content:explanation});
 
       const panel = vscode.window.createWebviewPanel(
         'followUpChat',
@@ -1870,7 +1951,6 @@ ${feedback}
             display:flex;
             flex-direction: column;
             background: #f4f4f4;
-            max-width: 900px; 
           }
 
           .message {
@@ -1895,57 +1975,6 @@ ${feedback}
             border: 1px solid #e5e7eb;
           }
 
-          /* 防溢出优化 */
-          .message code {
-            white-space: pre-wrap;
-            word-break: break-word;
-          }
-          .message pre {
-            white-space: pre;
-            overflow-x: auto;
-            max-width: 100%;
-          }
-          .message img {
-            max-width: 100%;
-            height: auto;
-          }
-          .message table {
-            display: block;
-            width: 100%;
-            overflow-x: auto;
-          }
-          .message th, .message td {
-            word-break: break-word;
-          }
-
-          /* 紧凑 Markdown 样式 */
-          .message.assistant p {
-            margin: 0.2em 0;
-            line-height: 1.4;
-          }
-          .message.assistant ul,
-          .message.assistant ol {
-            margin: 0.2em 0;
-            padding-left: 1.2em;
-          }
-          .message.assistant li {
-            margin: 0.15em 0;
-          }
-          .message.assistant h1,
-          .message.assistant h2,
-          .message.assistant h3 {
-            margin: 0.4em 0 0.2em;
-            line-height: 1.3;
-          }
-          .message.assistant table {
-            border-collapse: collapse;
-            margin: 0.3em 0;
-          }
-          .message.assistant th,
-          .message.assistant td {
-            padding: 4px 8px;
-          }
-
           #inputArea {
             display: flex;
             padding: 0.75em;
@@ -1960,9 +1989,8 @@ ${feedback}
             border: 1px solid #d1d5db;
             border-radius: 8px;
             outline:none;
-            resize: vertical;
-            min-height: 2.8em;
-            max-height: 40vh;
+            resize:none;
+            min-height:2.4em;
           }
 
           #sendBtn {
@@ -1984,6 +2012,16 @@ ${feedback}
           p {
             margin: 0.05em 0;
             line-height: 1.5;
+          }
+
+          ul {
+            margin-top: 0.3em;
+            margin-bottom: 0.3em;
+            padding-left: 1.2em;
+          }
+
+          li {
+            margin: 0.2em 0;
           }
 
           #suggestedArea {
@@ -2012,7 +2050,6 @@ ${feedback}
             background-color: #e0e0e0;
           }
 
-          
         </style>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
       </head>
@@ -2025,11 +2062,11 @@ ${feedback}
         </div>
 
         <div id="inputArea">
-          <textarea id="input" placeholder="Type your follow-up question..." /></textarea>
+          <input id="input" placeholder="Type your follow-up question..." />
           <button id="sendBtn">Send</button>
         </div>
 
-        
+        <div id="loadingStatus" style="margin-top: 0.5em; font-size: 0.9em; color: #555;"></div>
 
 
         <script>
@@ -2059,10 +2096,10 @@ ${feedback}
 
                 // loading status
                 const button = document.getElementById('sendBtn');
-      
+                const loading = document.getElementById('loadingStatus');
                 button.disabled = true;
-                button.textContent = 'Thinking...';
-                
+                button.textContent = 'Sending...';
+                loading.textContent = '🤖 Generating response...';
 
                 vscode.postMessage({ type: 'ask', question: text });
               });
@@ -2074,13 +2111,14 @@ ${feedback}
             const input = document.getElementById('input');
             const question = input.value.trim();
             const button = document.getElementById('sendBtn');
+            const loading = document.getElementById('loadingStatus');
             if (question) {
               appendMessage('user', question);
 
               // show loading status
               button.disabled = true;
-              button.textContent = 'Thinking...';
-              
+              button.textContent = 'Sending...';
+              loading.textContent = '🤖 Generating response...';
 
               vscode.postMessage({ type: 'ask', question });
               input.value = '';
@@ -2104,6 +2142,9 @@ ${feedback}
               const button = document.getElementById('sendBtn');
               button.disabled = false;
               button.textContent = 'Send';
+
+              const loading = document.getElementById('loadingStatus');
+              loading.textContent = '';
             }
           });
 
@@ -2129,25 +2170,11 @@ ${feedback}
           const apiKey = cfg.get<string>('apiKey') || '';
           const modelName = cfg.get<string>('modelName') || '';
 
-          // //const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
-          // const fullPrompt = conversation
-          //   .filter(msg => msg.role !== 'followup')
-          //   .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
-          //   .join('\n') + '\nAssistant:';
-
-          const mapRole = (r: 'user' | 'assistant' | 'followup'): 'User' | 'Assistant' | 'System' => {
-            if (r === 'user') return 'User';
-            if (r === 'followup') return 'System';
-            return 'Assistant';
-          };
-
-          const lines: string[] = [];
-          for (const m of conversation) {
-            // 不再过滤 followup，而是当作 System
-            const role = mapRole(m.role as any);
-            lines.push(`${role}: ${m.content}`);
-          }
-          const fullPrompt = lines.join('\n') + '\nAssistant:';
+          //const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
+          const fullPrompt = conversation
+            .filter(msg => msg.role !== 'followup')
+            .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
+            .join('\n') + '\nAssistant:';
 
           const body = {
             model: modelName,
@@ -2170,7 +2197,6 @@ ${feedback}
             panel.webview.postMessage({type: 'answer', content:answer});
           } catch (e: any) {
             vscode.window.showErrorMessage('Failed to fetch follow-up response: ' + e.message);
-            panel.webview.postMessage({ type: 'answer', content: `❌ Request failed: ${e.message || e}` });
           }
         }
       });
