@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import axios from 'axios';
+import * as path from 'path';
 import { toggleRecording } from './speech';
 import { killLocal } from './localServer';
 import { setExtensionContext } from './localServer';
@@ -9,6 +10,7 @@ import {
   getTestFiles, 
   listLocalExercises, 
   listLocalTemplates,
+  LOCAL_REPO_PATH,
 } from './gitUtils';
 import {
   getNotebookPythonPath,
@@ -25,6 +27,11 @@ import {
   extractPromptPlaceholders,
   fillPromptTemplate
 } from './promptUtils';
+
+const chan = vscode.window.createOutputChannel("Jupyter AI Feedback");
+function toStr(x:any){ try{ return typeof x==='string'?x:JSON.stringify(x,(_k,v)=>v,2);}catch{ return String(x);} }
+export function log(...args:any[]){ chan.appendLine(`[${new Date().toISOString()}] ` + args.map(toStr).join(" ")); console.log(...args); }
+export function showLog(preserveFocus=true){ chan.show(preserveFocus); }
 
 let recording = false;
 
@@ -1330,15 +1337,15 @@ ${feedback}
         const useHiddenTests = cfg.get<boolean>('useHiddenTests', true);
 
         // Debug configuration
-        console.log('=== Configuration Debug ===');
-        console.log('All jupyterAiFeedback config:', cfg);
-        console.log('useHiddenTests raw value:', cfg.get('useHiddenTests'));
-        console.log('useHiddenTests with default:', useHiddenTests);
-        console.log('Configuration source:', cfg.inspect('useHiddenTests'));
-        console.log('=== End Debug ===');
-        console.log('templateId:', templateId);
-        console.log('useHiddenTests:', useHiddenTests);
-        console.log('modelName:', modelName);
+        // log('=== Configuration Debug ===');
+        // log('All jupyterAiFeedback config:', cfg);
+        // log('useHiddenTests raw value:', cfg.get('useHiddenTests'));
+        // log('useHiddenTests with default:', useHiddenTests);
+        // log('Configuration source:', cfg.inspect('useHiddenTests'));
+        // log('=== End Debug ===');
+        // log('templateId:', templateId);
+        // log('useHiddenTests:', useHiddenTests);
+        // log('modelName:', modelName);
 
         if (!apiUrl || !apiKey || !modelName) {
           return vscode.window.showErrorMessage(
@@ -1380,7 +1387,7 @@ ${feedback}
 
           // Get notebook Python path
           const pythonPath = await getNotebookPythonPath();
-          console.log("pythonPath:", pythonPath)
+          // log("pythonPath:", pythonPath)
           if (!pythonPath) {
             vscode.window.showErrorMessage('cannot detect the Python environment of the current Notebook, please select the kernel first');
             return;
@@ -1395,8 +1402,22 @@ ${feedback}
             }
           }
 
-          // Run tests locally
-          const testResult = await runLocalTest(code, test, pythonPath);
+          // Prepare resource directories (e.g., data/) so user code can read files
+          const resourceDirs: string[] = [];
+          try {
+            // 1) From synced repo tests folder
+            const repoDataDir = path.join(LOCAL_REPO_PATH, 'tests', exId, 'data');
+            resourceDirs.push(repoDataDir);
+          } catch {}
+
+          // Run tests locally (with internal timeout guard and resource copy)
+          const testResult = await runLocalTest(code, test, pythonPath, 15000, resourceDirs);
+
+          // If timed out, annotate analysis to indicate potential infinite loop
+          if (testResult?.timeout) {
+            analysis += `## Test Execution Timeout\n`;
+            analysis += `- Hidden tests timed out. Your code may contain an infinite loop or long-running operation.\n\n`;
+          }
 
           // Parse test results and generate analysis
           if (testResult.report && testResult.report.tests) {
@@ -1447,8 +1468,8 @@ ${feedback}
         }
 
         // 5. Assemble prompt
-        console.log("promptContent:", promptContent)
-        console.log("analysis:", analysis)
+        // log("promptContent:", promptContent)
+        // log("analysis:", analysis)
         let prompt = promptContent;
 
         // 6. Extract and fill placeholders
@@ -1466,7 +1487,7 @@ ${feedback}
           const cellOutput = getCellOutput(cell);
           if (cellOutput.hasOutput) {
             placeholderMap.set('code_output', cellOutput.output);
-            console.log("cellOutput:", cellOutput.output)
+            // log("cellOutput:", cellOutput.output)
           } else {
             placeholderMap.set('code_output', '');
           }
@@ -1481,13 +1502,13 @@ ${feedback}
 
         // Fill only declared placeholders, keep others unchanged
         prompt = fillPromptTemplate(prompt, placeholderMap, editor.notebook);
-        // console.log("Final prompt after filling placeholders:", prompt);
+        // log("Final prompt after filling placeholders:", prompt);
 
         // Add system role to the beginning of the prompt
         const system_role = "You are a Python teaching assistant for programming beginners. Given the uploaded code and optional hidden test results, offer concise code suggestions on improvement and fixing output errors without directly giving solutions. Be encouraging and constructive in your feedback. ";
 
         const fullPrompt = system_role + prompt;
-        console.log("fullPrompt:", fullPrompt)
+        // log("fullPrompt:", fullPrompt)
 
         // Call the LLM interface
         let feedback: string;
@@ -1515,12 +1536,12 @@ ${feedback}
             };
           }
 
-          console.log('=== API Request Debug ===');
-          console.log('API URL:', apiUrl);
-          console.log('Model Name:', modelName);
-          console.log('Is OpenAI Endpoint:', isOpenAIEndpoint);
-          console.log('Request Body:', JSON.stringify(body, null, 2));
-          console.log('=== End API Request Debug ===');
+          // log('=== API Request Debug ===');
+          // log('API URL:', apiUrl);
+          // log('Model Name:', modelName);
+          // log('Is OpenAI Endpoint:', isOpenAIEndpoint);
+          // log('Request Body:', JSON.stringify(body, null, 2));
+          // log('=== End API Request Debug ===');
 
           const resp = await axios.post(
             apiUrl,
@@ -1534,11 +1555,10 @@ ${feedback}
             }
           );
 
-          console.log('=== API Response Debug ===');
-          console.log('Response Status:', resp.status);
-          // console.log('Response Data:', resp.data);
-          console.log('Response Headers:', resp.headers);
-          console.log('=== End API Response Debug ===');
+          // log('=== API Response Debug ===');
+          // log('Response Status:', resp.status);
+          // log('Response Headers:', resp.headers);
+          // log('=== End API Response Debug ===');
 
           if (isOpenAIEndpoint) {
             // Handle OpenAI format response
@@ -1569,7 +1589,7 @@ ${feedback}
             }
             feedback = fullResponse;
           }
-          console.log('feedback:', feedback)
+          // log('feedback:', feedback)
 
         } catch (e: any) {
           let errorMessage = 'AI API call failed: ' + e.message;
