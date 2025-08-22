@@ -1689,8 +1689,6 @@ ${feedback}
           return;
         }
 
-
-
         const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
         const mode = cfg.get<string>('feedbackMode');
         const apiUrl = cfg.get<string>('apiUrl') || '';
@@ -1729,10 +1727,31 @@ ${feedback}
 
         await syncGitRepo()
         const promptTpl = await getPromptContent(mode);
-
-        const prompt = promptTpl.replace('{{content}}', inputText);
+        
+        let prompt:string 
+        switch (mode) {
+          case "Expand": {
+            prompt = promptTpl.replace('{{content}}', inputText);
+            break;
+          }
+          case "Explain": {
+//             const values = {
+//               'selectedText': inputText,
+//               'code': "",
+//               'wholeFeedback': fullText
+//             }
+//             prompt = promptTpl.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+//   return values[key as keyof typeof values] ?? "";
+// });
+            prompt = promptTpl.replace('{{selectedText}}', inputText).replace('{{code}}', "").replace('{{wholeFeedback}}', fullText);
+            break;
+          }
+          default:
+            prompt = promptTpl;
+        }
+        
         const generatingNote = `*(Generating...)*`;
-        const finishedNote = `**✅ AI Generation Completed**`;
+        //const finishedNote = `**✅ AI Generation Completed**`;
 
         // add or renew markdown cell
         let newCell: vscode.NotebookCell;
@@ -1828,7 +1847,7 @@ ${feedback}
 
       let followupPrompt = '';
       try{
-        followupPrompt = await getPromptContent('Followup');
+        followupPrompt = await getPromptContent('followup');
         conversation.push({role:'followup', content:followupPrompt});
       } catch(e:any){
         vscode.window.showErrorMessage('⚠️ Failed to load Followup prompt: ' + e.message);
