@@ -45,7 +45,8 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
 
   // 1. Single cell comments
   console.log('\n--- 1. Scan single cell comments ---');
-  for (let i = 0; i < notebook.cellCount; ++i) {
+  // Scan from current cell upwards to find the nearest placeholder values
+  for (let i = currentCellIdx; i >= 0; --i) {
     const cell = notebook.cellAt(i);
     const text = cell.document.getText();
     console.log(`Cell ${i} (${cell.kind === vscode.NotebookCellKind.Markup ? 'Markdown' : 'Code'}):`, text.substring(0, 100) + (text.length > 100 ? '...' : ''));
@@ -55,17 +56,23 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
     while ((match = htmlCommentRe.exec(text)) !== null) {
       const key = match[1];
       console.log(`  Found HTML comment: prompt:${key}`);
-      // Extract the content after the comment, not the whole cell
-      const afterComment = text.substring(match.index + match[0].length).trim();
-      placeholderMap.set(key, afterComment);
+      // Only set if this key hasn't been found yet (closest to current cell takes precedence)
+      if (!placeholderMap.has(key)) {
+        // Extract the content after the comment, not the whole cell
+        const afterComment = text.substring(match.index + match[0].length).trim();
+        placeholderMap.set(key, afterComment);
+      }
     }
     // Hash (#) comments
     while ((match = hashCommentRe.exec(text)) !== null) {
       const key = match[1];
       console.log(`  Found hash comment: prompt:${key}`);
-      // Extract the content after the comment, not the whole cell
-      const afterComment = text.substring(match.index + match[0].length).trim();
-      placeholderMap.set(key, afterComment);
+      // Only set if this key hasn't been found yet (closest to current cell takes precedence)
+      if (!placeholderMap.has(key)) {
+        // Extract the content after the comment, not the whole cell
+        const afterComment = text.substring(match.index + match[0].length).trim();
+        placeholderMap.set(key, afterComment);
+      }
     }
   }
 
