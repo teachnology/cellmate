@@ -18,8 +18,7 @@ export function getSttPort(): number {
 }
 
 // 👉 Replace with your own direct link
-const TINY_ZIP  = 'https://github.com/esemsc-zf1124/cellmate/releases/download/v1.0-tiny/whisper_srv_tiny.zip';
-
+const TINY_ZIP  = 'https://github.com/teachnology/cellmate/releases/download/v0.1-tiny/whisper_srv_tiny_mac.zip';
 // —— Port will be dynamically assigned at runtime ——
 let PORT = 5000;
 let srv: ChildProcess | null = null;
