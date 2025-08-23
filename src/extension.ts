@@ -1673,6 +1673,18 @@ ${feedback}
     return cleaned.trim();
 }
 
+type ExplanationCtx = {
+  wholeFeedback?: string;    
+};
+
+const explanationStore = new Map<string, ExplanationCtx>();
+
+function setExplanationCtx(cellUri: string, ctx: ExplanationCtx) {
+  explanationStore.set(cellUri, ctx);
+}
+function getExplanationCtx(cellUri: string) {
+  return explanationStore.get(cellUri);
+}
   // Markdown cell
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
@@ -1705,6 +1717,7 @@ ${feedback}
         // full text or select sentences
         let inputText = '';
         let header = '';
+
         if (mode === 'Expand') {
           inputText = fullText;
           header = `**🤖 Feedback Expansion**`;
@@ -1735,15 +1748,15 @@ ${feedback}
             break;
           }
           case "Explain": {
-//             const values = {
-//               'selectedText': inputText,
-//               'code': "",
-//               'wholeFeedback': fullText
-//             }
-//             prompt = promptTpl.replace(/\{\{(\w+)\}\}/g, (_, key) => {
-//   return values[key as keyof typeof values] ?? "";
-// });
-            prompt = promptTpl.replace('{{selectedText}}', inputText).replace('{{code}}', "").replace('{{wholeFeedback}}', fullText);
+            prompt = promptTpl.replace('{{selectedText}}', inputText).replace('{{wholeFeedback}}', fullText);
+
+            // extract all placeholders
+            const placeholderKeys = getTemplatePlaceholderKeys(prompt);
+
+            // extract placeholder content
+            const placeholderMap = extractPromptPlaceholders(editor.notebook, cell.index, placeholderKeys)
+
+            prompt = fillPromptTemplate(prompt, placeholderMap, editor.notebook)
             break;
           }
           default:
@@ -1822,6 +1835,10 @@ ${feedback}
           const finalContent = `${wrappedContent}\n`;
           await replaceCellContent(doc,finalContent);
 
+          const cellUri = newCell.document.uri.toString();
+          setExplanationCtx(cellUri, {
+            wholeFeedback: fullText,              
+          });
         } catch (e:any) {
           console.error("AI Extension fail:", e);
           const errorMsg = `${header}\n\n❌ AI generation failed:\n\n\`${e.message}\``;
@@ -1832,6 +1849,7 @@ ${feedback}
     )
   );
 
+
   // follow up question button
   ctx.subscriptions.push(
     vscode.commands.registerCommand('jupyterAiFeedback.askFollowUpFromButton', async (cell: vscode.NotebookCell) => {
@@ -1839,20 +1857,18 @@ ${feedback}
       if (!editor) {
         return vscode.window.showErrorMessage('No active notebook editor');
       }
+      
+      const cellUri = cell.document.uri.toString();
+      const ctxData = getExplanationCtx?.(cellUri);
 
-      const explanation = cell.document.getText()
-      const conversation: { role: 'user' | 'assistant' | 'followup'; content: string }[] = [
-        {role:'assistant', content:explanation}
-      ];
+      const explanationOutput = cell.document.getText();
 
-      let followupPrompt = '';
-      try{
-        followupPrompt = await getPromptContent('followup');
-        conversation.push({role:'followup', content:followupPrompt});
-      } catch(e:any){
+      let followupPromptTpl = '';
+      try {
+        followupPromptTpl = await getPromptContent('followup');
+      } catch (e:any) {
         vscode.window.showErrorMessage('⚠️ Failed to load Followup prompt: ' + e.message);
       }
-
       const panel = vscode.window.createWebviewPanel(
         'followUpChat',
         'Follow-up Chat',
@@ -2139,58 +2155,35 @@ ${feedback}
       panel.webview.html = getHTML();
 
       panel.webview.onDidReceiveMessage(async (msg) => {
-        if (msg.type === 'ask') {
-          const question = msg.question;
-          conversation.push({ role: 'user', content: question });
+        // if (msg.type === 'ask') {
+        //   const question = msg.question;
+        //   conversation.push({ role: 'user', content: question });
+
+          if (msg.type !== 'ask') return;
+
+          const question = String(msg.question ?? '');
+          const wholeFeedback = ctxData?.wholeFeedback ?? '';
+
+          // 直接拼接 prompt
+          const fullPrompt = followupPromptTpl
+            .replace('{{explanationOutput}}', explanationOutput)
+            .replace('{{wholeFeedback}}', wholeFeedback)
+            .replace('{{followupQuestion}}', question);
 
           const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
           const apiUrl = cfg.get<string>('apiUrl') || '';
           const apiKey = cfg.get<string>('apiKey') || '';
           const modelName = cfg.get<string>('modelName') || '';
 
-          // //const fullPrompt = conversation.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n') + '\nAssistant:';
-          // const fullPrompt = conversation
-          //   .filter(msg => msg.role !== 'followup')
-          //   .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
-          //   .join('\n') + '\nAssistant:';
-
-          const mapRole = (r: 'user' | 'assistant' | 'followup'): 'User' | 'Assistant' | 'System' => {
-            if (r === 'user') return 'User';
-            if (r === 'followup') return 'System';
-            return 'Assistant';
-          };
-
-          const lines: string[] = [];
-          for (const m of conversation) {
-            // 不再过滤 followup，而是当作 System
-            const role = mapRole(m.role as any);
-            lines.push(`${role}: ${m.content}`);
-          }
-          const fullPrompt = lines.join('\n') + '\nAssistant:';
-
-          const body = {
-            model: modelName,
-            prompt: fullPrompt,
-            stream: false
-          };
-
           try {
-            const resp = await axios.post(apiUrl, body, {
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`
-              }
-            });
+          const resp = await axios.post(apiUrl, { model: modelName, prompt: fullPrompt, stream:false }, {
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
+          });
 
-            const answer = resp.data.message?.content || resp.data.response || 'No response received';
-            conversation.push({ role: 'assistant', content: answer });
-
-            // const chatHtml = buildChatHtml(conversation);
-            panel.webview.postMessage({type: 'answer', content:answer});
-          } catch (e: any) {
-            vscode.window.showErrorMessage('Failed to fetch follow-up response: ' + e.message);
-            panel.webview.postMessage({ type: 'answer', content: `❌ Request failed: ${e.message || e}` });
-          }
+          const answer = resp.data?.message?.content || resp.data?.response || 'No response received';
+          panel.webview.postMessage({ type: 'answer', content: answer });
+        } catch (e:any) {
+          panel.webview.postMessage({ type: 'answer', content: `❌ Request failed: ${e.message}` });
         }
       });
     })
