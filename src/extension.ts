@@ -1749,19 +1749,19 @@ function getExplanationCtx(cellUri: string) {
           }
           case "Explain": {
             prompt = promptTpl.replace('{{selectedText}}', inputText).replace('{{wholeFeedback}}', fullText);
-
-            // extract all placeholders
-            const placeholderKeys = getTemplatePlaceholderKeys(prompt);
-
-            // extract placeholder content
-            const placeholderMap = extractPromptPlaceholders(editor.notebook, cell.index, placeholderKeys)
-
-            prompt = fillPromptTemplate(prompt, placeholderMap, editor.notebook)
             break;
           }
           default:
             prompt = promptTpl;
         }
+        
+        // extract all placeholders
+        const placeholderKeys = getTemplatePlaceholderKeys(prompt);
+
+        // extract placeholder content
+        const placeholderMap = extractPromptPlaceholders(editor.notebook, cell.index, placeholderKeys)
+
+        prompt = fillPromptTemplate(prompt, placeholderMap, editor.notebook)
         
         const generatingNote = `*(Generating...)*`;
         //const finishedNote = `**✅ AI Generation Completed**`;
@@ -1830,7 +1830,7 @@ function getExplanationCtx(cellUri: string) {
 
           // Add colored border based on mode, wrapping both header and content
           const borderColor = mode === 'Expand' ? '#6ec5d2ff' : '#4CAF50';
-          const wrappedContent = `<div style="border: 3px solid ${borderColor}; padding: 10px">\n\n${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n</div>`;
+          const wrappedContent = `<div style="box-sizing:border-box; border: 3px solid ${borderColor}; padding: 10px ;border-radius:8px;">\n\n${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n</div>`;
           
           const finalContent = `${wrappedContent}\n`;
           await replaceCellContent(doc,finalContent);
