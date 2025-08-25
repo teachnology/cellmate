@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import axios from 'axios';
+import * as path from 'path';
 import { toggleRecording } from './speech';
 import { killLocal } from './localServer';
 import { setExtensionContext } from './localServer';
@@ -9,6 +10,7 @@ import {
   getTestFiles, 
   listLocalExercises, 
   listLocalTemplates,
+  LOCAL_REPO_PATH,
 } from './gitUtils';
 import {
   getNotebookPythonPath,
@@ -25,6 +27,11 @@ import {
   extractPromptPlaceholders,
   fillPromptTemplate
 } from './promptUtils';
+
+const chan = vscode.window.createOutputChannel("Jupyter AI Feedback");
+function toStr(x:any){ try{ return typeof x==='string'?x:JSON.stringify(x,(_k,v)=>v,2);}catch{ return String(x);} }
+export function log(...args:any[]){ chan.appendLine(`[${new Date().toISOString()}] ` + args.map(toStr).join(" ")); console.log(...args); }
+export function showLog(preserveFocus=true){ chan.show(preserveFocus); }
 
 let recording = false;
 
@@ -51,14 +58,15 @@ class ErrorHelperPanel {
   private messages: ChatMessage[] = [];
   private config: LLMConfig;
   private errorHelperFeedback: string;
+  private problemDescription: string;
 
-  public static createOrShow(extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig, errorHelperFeedback?: string): void {
+  public static createOrShow(extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig, errorHelperFeedback?: string, problemDescription?: string): void {
     const column = vscode.ViewColumn.Two;
 
     // If we already have a panel, show it
     if (ErrorHelperPanel.currentPanel) {
       ErrorHelperPanel.currentPanel.panel.reveal(column);
-      ErrorHelperPanel.currentPanel.updateCell(cell, errorHelperFeedback);
+      ErrorHelperPanel.currentPanel.updateCell(cell, errorHelperFeedback, problemDescription);
       return;
     }
 
@@ -74,15 +82,16 @@ class ErrorHelperPanel {
       }
     );
 
-    ErrorHelperPanel.currentPanel = new ErrorHelperPanel(panel, extensionUri, cell, config, errorHelperFeedback || '');
+    ErrorHelperPanel.currentPanel = new ErrorHelperPanel(panel, extensionUri, cell, config, errorHelperFeedback || '', problemDescription || '');
   }
 
-  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig, errorHelperFeedback: string) {
+  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, cell: vscode.NotebookCell, config: LLMConfig, errorHelperFeedback: string, problemDescription: string) {
     this.panel = panel;
     this.extensionUri = extensionUri;
     this.cell = cell;
     this.config = config;
     this.errorHelperFeedback = errorHelperFeedback;
+    this.problemDescription = problemDescription;
 
     // Set the webview's initial html content
     this.update();
@@ -177,6 +186,14 @@ class ErrorHelperPanel {
         prompt = prompt.replace('{{error_helper_feedback}}', '');
       }
 
+      // Handle problem_description
+      if (this.problemDescription && this.problemDescription.trim()) {
+        prompt = prompt.replace('{{problem_description}}', this.problemDescription);
+      } else {
+        prompt = prompt.replace(/\*\*Problem Description:\*\*\s*\{\{problem_description\}\}\s*\n\n?/g, '');
+        prompt = prompt.replace('{{problem_description}}', '');
+      }
+
       return await callLLMAPI(prompt, this.config);
     } catch (error) {
       console.error('Failed to load chat template, using fallback:', error);
@@ -186,19 +203,23 @@ class ErrorHelperPanel {
 
 **Code:** ${code}
 **Error:** ${cellOutput.output}
+${this.problemDescription ? `**Problem Context:** ${this.problemDescription}` : ''}
 ${this.errorHelperFeedback ? `**Previous Analysis:** ${this.errorHelperFeedback}` : ''}
 **Question:** ${userMessage}
 
-Please provide a helpful response based on the code, error${this.errorHelperFeedback ? ', and previous analysis' : ''}.`;
+Please provide a helpful response based on the code, error${this.problemDescription ? ', problem context' : ''}${this.errorHelperFeedback ? ', and previous analysis' : ''}.`;
 
       return await callLLMAPI(fallbackPrompt, this.config);
     }
   }
 
-  public updateCell(cell: vscode.NotebookCell, errorHelperFeedback?: string) {
+  public updateCell(cell: vscode.NotebookCell, errorHelperFeedback?: string, problemDescription?: string): void {
     this.cell = cell;
     if (errorHelperFeedback) {
       this.errorHelperFeedback = errorHelperFeedback;
+    }
+    if (problemDescription !== undefined) {
+      this.problemDescription = problemDescription;
     }
     this.messages = []; // Reset conversation for new cell
     this.update();
@@ -215,10 +236,10 @@ Please provide a helpful response based on the code, error${this.errorHelperFeed
     const code = this.cell.document.getText();
     const cellOutput = getCellOutput(this.cell);
 
-    this.panel.webview.html = this.getHtmlForWebview(code, cellOutput.output, this.errorHelperFeedback);
+    this.panel.webview.html = this.getHtmlForWebview(code, cellOutput.output, this.errorHelperFeedback, this.problemDescription);
   }
 
-  private getHtmlForWebview(code: string, errorOutput: string, errorHelperFeedback: string): string {
+  private getHtmlForWebview(code: string, errorOutput: string, errorHelperFeedback: string, problemDescription: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -299,6 +320,18 @@ Please provide a helpful response based on the code, error${this.errorHelperFeed
             border-radius: 4px;
             padding: 10px;
             border-left: 3px solid var(--vscode-textLink-foreground);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .problem-content {
+            padding: 0 15px 12px;
+            font-size: 12px;
+            background: var(--vscode-editor-inactiveSelectionBackground);
+            margin: 0 15px 12px;
+            border-radius: 4px;
+            padding: 10px;
+            border-left: 3px solid var(--vscode-textLink-activeForeground);
             white-space: pre-wrap;
             word-wrap: break-word;
         }
@@ -474,6 +507,10 @@ Please provide a helpful response based on the code, error${this.errorHelperFeed
     </div>
 
     <div class="context-section">
+        ${problemDescription ? `
+        <div class="context-header">Problem Description</div>
+        <div class="problem-content">${problemDescription}</div>
+        ` : ''}
         <div class="context-header">Code & Error Context</div>
         <div class="context-content">${code}
 
@@ -492,7 +529,7 @@ ${errorOutput}</div>
                 AI Helper
             </div>
             <div>
-                I have your code, error details${errorHelperFeedback ? ', and previous analysis' : ''}. What specific questions do you have about this error?
+                I have your code, error details${problemDescription ? ', problem description' : ''}${errorHelperFeedback ? ', and previous analysis' : ''}. What specific questions do you have about this error?
             </div>
         </div>
     </div>
@@ -1125,9 +1162,45 @@ export function activate(ctx: vscode.ExtensionContext) {
 
           await syncGitRepo();
           const promptContent = await getPromptContent('error_helper');
+          const placeholderKeys = getTemplatePlaceholderKeys(promptContent);
+          const placeholderMap = extractPromptPlaceholders(editor.notebook, cell.index, placeholderKeys);
 
-          let prompt = promptContent.replace('{{code}}', code);
-          prompt = prompt.replace('{{code_output}}', cellOutput.output);
+          placeholderMap.set('code', code);
+          placeholderMap.set('code_output', cellOutput.output);
+
+          const possibleKeys = ['problem_description', 'problem', 'exercise_description', 'task'];
+          let problemDescription = '';
+          
+          for (const key of possibleKeys) {
+            if (placeholderMap.has(key)) {
+              problemDescription = placeholderMap.get(key) || '';
+              if (problemDescription) {
+                console.log(`Found explicitly marked problem description with key: ${key}`);
+                break;
+              }
+            }
+          }
+
+          placeholderMap.set('problem_description', problemDescription);
+
+          let prompt = '';
+          if (problemDescription) {
+            let enhancedPrompt = promptContent.replace(
+              '{{problem_description}}',
+              `**Problem Description:**\n${problemDescription}\n\n` +
+              `**IMPORTANT:** Consider both the error AND the problem requirements when providing guidance. ` +
+              `Ensure your suggestions align with the expected solution approach.`
+            );
+            prompt = fillPromptTemplate(enhancedPrompt, placeholderMap, editor.notebook);
+            console.log('Using enhanced prompt with problem description');
+          } else {
+            let standardPrompt = promptContent.replace('{{problem_description}}', '');
+            prompt = fillPromptTemplate(standardPrompt, placeholderMap, editor.notebook);
+            console.log('Using standard prompt without problem description');
+          }
+          
+          console.log('Problem description found:', problemDescription ? 'Yes' : 'No');
+          console.log('Problem description length:', problemDescription.length);
 
           const feedback = await callLLMAPI(prompt, config);
 
@@ -1146,7 +1219,7 @@ export function activate(ctx: vscode.ExtensionContext) {
             );
 
             if (action === 'Start Chat') {
-              ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, feedback);
+              ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, feedback, problemDescription);
             }
           } else {
             // markdown mode
@@ -1167,7 +1240,7 @@ ${feedback}
             );
 
             if (action === 'Start Chat') {
-              ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, feedback);
+              ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, feedback, problemDescription);
             }
           }
 
@@ -1219,7 +1292,28 @@ ${feedback}
           errorHelperFeedback = findExistingErrorHelperFeedback(cell);
         }
 
-        ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, errorHelperFeedback);
+        const editor = vscode.window.activeNotebookEditor;
+        let problemDescription = '';
+        
+        if (editor) {
+          // Extract placeholders
+          const placeholderKeys = new Set(['problem_description', 'problem', 'exercise_description', 'task']);
+          const placeholderMap = extractPromptPlaceholders(editor.notebook, cell.index, placeholderKeys);
+
+          // Find problem description
+          const possibleKeys = ['problem_description', 'problem', 'exercise_description', 'task'];
+          for (const key of possibleKeys) {
+            if (placeholderMap.has(key)) {
+              problemDescription = placeholderMap.get(key) || '';
+              if (problemDescription) {
+                console.log(`Found problem description with key: ${key} in Start Error Chat`);
+                break;
+              }
+            }
+          }
+        }
+
+        ErrorHelperPanel.createOrShow(ctx.extensionUri, cell, config, errorHelperFeedback, problemDescription);
       }
     )
   );
@@ -1243,15 +1337,15 @@ ${feedback}
         const useHiddenTests = cfg.get<boolean>('useHiddenTests', true);
 
         // Debug configuration
-        console.log('=== Configuration Debug ===');
-        console.log('All jupyterAiFeedback config:', cfg);
-        console.log('useHiddenTests raw value:', cfg.get('useHiddenTests'));
-        console.log('useHiddenTests with default:', useHiddenTests);
-        console.log('Configuration source:', cfg.inspect('useHiddenTests'));
-        console.log('=== End Debug ===');
-        console.log('templateId:', templateId);
-        console.log('useHiddenTests:', useHiddenTests);
-        console.log('modelName:', modelName);
+        // log('=== Configuration Debug ===');
+        // log('All jupyterAiFeedback config:', cfg);
+        // log('useHiddenTests raw value:', cfg.get('useHiddenTests'));
+        // log('useHiddenTests with default:', useHiddenTests);
+        // log('Configuration source:', cfg.inspect('useHiddenTests'));
+        // log('=== End Debug ===');
+        // log('templateId:', templateId);
+        // log('useHiddenTests:', useHiddenTests);
+        // log('modelName:', modelName);
 
         if (!apiUrl || !apiKey || !modelName) {
           return vscode.window.showErrorMessage(
@@ -1293,7 +1387,7 @@ ${feedback}
 
           // Get notebook Python path
           const pythonPath = await getNotebookPythonPath();
-          console.log("pythonPath:", pythonPath)
+          // log("pythonPath:", pythonPath)
           if (!pythonPath) {
             vscode.window.showErrorMessage('cannot detect the Python environment of the current Notebook, please select the kernel first');
             return;
@@ -1308,8 +1402,22 @@ ${feedback}
             }
           }
 
-          // Run tests locally
-          const testResult = await runLocalTest(code, test, pythonPath);
+          // Prepare resource directories (e.g., data/) so user code can read files
+          const resourceDirs: string[] = [];
+          try {
+            // 1) From synced repo tests folder
+            const repoDataDir = path.join(LOCAL_REPO_PATH, 'tests', exId, 'data');
+            resourceDirs.push(repoDataDir);
+          } catch {}
+
+          // Run tests locally (with internal timeout guard and resource copy)
+          const testResult = await runLocalTest(code, test, pythonPath, 15000, resourceDirs);
+
+          // If timed out, annotate analysis to indicate potential infinite loop
+          if (testResult?.timeout) {
+            analysis += `## Test Execution Timeout\n`;
+            analysis += `- Hidden tests timed out. Your code may contain an infinite loop or long-running operation.\n\n`;
+          }
 
           // Parse test results and generate analysis
           if (testResult.report && testResult.report.tests) {
@@ -1360,8 +1468,8 @@ ${feedback}
         }
 
         // 5. Assemble prompt
-        console.log("promptContent:", promptContent)
-        console.log("analysis:", analysis)
+        // log("promptContent:", promptContent)
+        // log("analysis:", analysis)
         let prompt = promptContent;
 
         // 6. Extract and fill placeholders
@@ -1379,7 +1487,7 @@ ${feedback}
           const cellOutput = getCellOutput(cell);
           if (cellOutput.hasOutput) {
             placeholderMap.set('code_output', cellOutput.output);
-            console.log("cellOutput:", cellOutput.output)
+            // log("cellOutput:", cellOutput.output)
           } else {
             placeholderMap.set('code_output', '');
           }
@@ -1394,13 +1502,13 @@ ${feedback}
 
         // Fill only declared placeholders, keep others unchanged
         prompt = fillPromptTemplate(prompt, placeholderMap, editor.notebook);
-        // console.log("Final prompt after filling placeholders:", prompt);
+        // log("Final prompt after filling placeholders:", prompt);
 
         // Add system role to the beginning of the prompt
         const system_role = "You are a Python teaching assistant for programming beginners. Given the uploaded code and optional hidden test results, offer concise code suggestions on improvement and fixing output errors without directly giving solutions. Be encouraging and constructive in your feedback. ";
 
         const fullPrompt = system_role + prompt;
-        console.log("fullPrompt:", fullPrompt)
+        // log("fullPrompt:", fullPrompt)
 
         // Call the LLM interface
         let feedback: string;
@@ -1428,12 +1536,12 @@ ${feedback}
             };
           }
 
-          console.log('=== API Request Debug ===');
-          console.log('API URL:', apiUrl);
-          console.log('Model Name:', modelName);
-          console.log('Is OpenAI Endpoint:', isOpenAIEndpoint);
-          console.log('Request Body:', JSON.stringify(body, null, 2));
-          console.log('=== End API Request Debug ===');
+          // log('=== API Request Debug ===');
+          // log('API URL:', apiUrl);
+          // log('Model Name:', modelName);
+          // log('Is OpenAI Endpoint:', isOpenAIEndpoint);
+          // log('Request Body:', JSON.stringify(body, null, 2));
+          // log('=== End API Request Debug ===');
 
           const resp = await axios.post(
             apiUrl,
@@ -1447,11 +1555,10 @@ ${feedback}
             }
           );
 
-          console.log('=== API Response Debug ===');
-          console.log('Response Status:', resp.status);
-          // console.log('Response Data:', resp.data);
-          console.log('Response Headers:', resp.headers);
-          console.log('=== End API Response Debug ===');
+          // log('=== API Response Debug ===');
+          // log('Response Status:', resp.status);
+          // log('Response Headers:', resp.headers);
+          // log('=== End API Response Debug ===');
 
           if (isOpenAIEndpoint) {
             // Handle OpenAI format response
@@ -1482,7 +1589,7 @@ ${feedback}
             }
             feedback = fullResponse;
           }
-          console.log('feedback:', feedback)
+          // log('feedback:', feedback)
 
         } catch (e: any) {
           let errorMessage = 'AI API call failed: ' + e.message;
@@ -1647,8 +1754,7 @@ ${feedback}
     let cleaned = text;
 
     // Remove common redundant phrases generated by LLMs
-    cleaned = cleaned.replace(/^.*?(Expanded Feedback|Feedback Expansion|Here.*feedback|Based on.*feedback).*$/gmi, '');
-    
+    cleaned = cleaned.replace(/^.*?(Expanded Feedback|Feedback Expansion|Here.*feedback|Based on.*feedback).*$/gmi, '');    
     // Remove extra blank lines
     cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
 
@@ -1830,7 +1936,6 @@ function getExplanationCtx(cellUri: string) {
           // Add colored border based on mode, wrapping both header and content
           const borderColor = mode === 'Expand' ? '#6ec5d2ff' : '#4CAF50';
           const wrappedContent = `<div style="box-sizing:border-box; border: 3px solid ${borderColor}; padding: 10px ;border-radius:8px;">\n\n${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n</div>`;
-          
           const finalContent = `${wrappedContent}\n`;
           await replaceCellContent(doc,finalContent);
 
@@ -1904,7 +2009,7 @@ function getExplanationCtx(cellUri: string) {
             display:flex;
             flex-direction: column;
             background: #f4f4f4;
-            max-width: 900px; 
+            max-width: 900px;
           }
 
           .message {
@@ -1951,7 +2056,6 @@ function getExplanationCtx(cellUri: string) {
           .message th, .message td {
             word-break: break-word;
           }
-
           /* 紧凑 Markdown 样式 */
           .message.assistant p {
             margin: 0.2em 0;
@@ -2046,7 +2150,7 @@ function getExplanationCtx(cellUri: string) {
             background-color: #e0e0e0;
           }
 
-          
+
         </style>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
       </head>
@@ -2063,7 +2167,6 @@ function getExplanationCtx(cellUri: string) {
           <button id="sendBtn">Send</button>
         </div>
 
-        
 
 
         <script>
@@ -2093,10 +2196,10 @@ function getExplanationCtx(cellUri: string) {
 
                 // loading status
                 const button = document.getElementById('sendBtn');
-      
+
                 button.disabled = true;
                 button.textContent = 'Thinking...';
-                
+
 
                 vscode.postMessage({ type: 'ask', question: text });
               });
@@ -2114,7 +2217,7 @@ function getExplanationCtx(cellUri: string) {
               // show loading status
               button.disabled = true;
               button.textContent = 'Thinking...';
-              
+
 
               vscode.postMessage({ type: 'ask', question });
               input.value = '';
@@ -2181,9 +2284,9 @@ function getExplanationCtx(cellUri: string) {
 
           const answer = resp.data?.message?.content || resp.data?.response || 'No response received';
           panel.webview.postMessage({ type: 'answer', content: answer });
-        } catch (e:any) {
-          panel.webview.postMessage({ type: 'answer', content: `❌ Request failed: ${e.message}` });
-        }
+          } catch (e:any) {
+            panel.webview.postMessage({ type: 'answer', content: `❌ Request failed: ${e.message}` });
+          }
       });
     })
   );

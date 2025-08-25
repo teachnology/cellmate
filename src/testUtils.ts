@@ -57,7 +57,13 @@ export function ensurePythonDeps(pythonPath: string, pkgs: string[]): Promise<bo
 /**
  * Run local tests using pytest
  */
-export async function runLocalTest(code: string, test: string, pythonPath: string): Promise<any> {
+export async function runLocalTest(
+  code: string,
+  test: string,
+  pythonPath: string,
+  timeoutMs: number = 15000,
+  resourceDirs?: string[]
+): Promise<any> {
   // Create temporary directory
   const tmpDir = tmp.dirSync({ unsafeCleanup: true });
   const codePath = path.join(tmpDir.name, 'submission.py');
@@ -67,6 +73,34 @@ export async function runLocalTest(code: string, test: string, pythonPath: strin
   // Write user code and test code
   fs.writeFileSync(codePath, code, 'utf8');
   fs.writeFileSync(testPath, test, 'utf8');
+
+  // If there are resource directories (e.g., data/), copy them into tmpDir
+  if (Array.isArray(resourceDirs) && resourceDirs.length > 0) {
+    const copyDirectoryRecursive = (srcDir: string, destDir: string) => {
+      if (!fs.existsSync(srcDir)) return;
+      fs.mkdirSync(destDir, { recursive: true });
+      const entries = fs.readdirSync(srcDir, { withFileTypes: true });
+      for (const entry of entries) {
+        const srcPath = path.join(srcDir, entry.name);
+        const destPath = path.join(destDir, entry.name);
+        if (entry.isDirectory()) {
+          copyDirectoryRecursive(srcPath, destPath);
+        } else if (entry.isFile()) {
+          fs.copyFileSync(srcPath, destPath);
+        }
+      }
+    };
+    try {
+      for (const dir of resourceDirs) {
+        if (!dir) continue;
+        const baseName = path.basename(dir);
+        const dest = path.join(tmpDir.name, baseName);
+        copyDirectoryRecursive(dir, dest);
+      }
+    } catch (e:any) {
+      vscode.window.showWarningMessage(`Failed to copy resource directories: ${e?.message || e}`);
+    }
+  }
 
   // Call pytest
   return new Promise((resolve) => {
@@ -79,16 +113,39 @@ export async function runLocalTest(code: string, test: string, pythonPath: strin
 
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    let finished = false;
+
+    // Timeout to prevent infinite loops in user code from hanging
+    const timer = setTimeout(() => {
+      if (finished) return;
+      timedOut = true;
+      stderr += `\n[Timeout] Test execution exceeded ${timeoutMs} ms and was terminated.`;
+      try {
+        if (process.platform === 'win32' && typeof proc.pid === 'number') {
+          // Terminate the entire process tree on Windows
+          cp.exec(`taskkill /PID ${proc.pid} /T /F`);
+        } else {
+          proc.kill('SIGKILL');
+        }
+      } catch {
+        // ignore
+      }
+    }, timeoutMs);
+
     proc.stdout.on('data', (data) => stdout += data.toString());
     proc.stderr.on('data', (data) => stderr += data.toString());
 
     proc.on('close', () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
       let report = {};
       if (fs.existsSync(reportPath)) {
         report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
       }
       tmpDir.removeCallback();
-      resolve({ stdout, stderr, report });
+      resolve({ stdout, stderr, report, timeout: timedOut });
     });
   });
 }

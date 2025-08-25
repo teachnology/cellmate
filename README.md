@@ -38,8 +38,37 @@ npm run compile
 
 1. **Open Jupyter Notebook**: Open a `.ipynb` file in VS Code
 2. **Write Code**: Write Python code in code cells
-3. **Click bottom**: Click the AI feedback bottom
+3. **Click button**: Click the AI feedback button
 4. **View Feedback**: The extension will automatically generate feedback and insert it into the notebook
+
+### Error Helper and Error Chat
+
+- **Error Helper**: Automatically analyzes Python errors and provides targeted debugging guidance without giving away answers. 
+
+  When problem description is provided, considers both the error and problem requirements. To include problem just simply mark your problem description:
+
+  ```markdown
+  <!-- prompt:problem_description -->
+  Calculate the nth Fibonacci number recursively
+  ```
+  Or in code cells:
+  ```python
+  # prompt:problem_description
+  # Calculate the nth Fibonacci number recursively
+  ```
+
+- **Error Chat**: Students can ask follow-up questions about errors in a conversational interface after Error Helper's complete analysis.
+
+#### How to Use Error Helper:
+1. **Run Your Code**: Execute a Python cell that produces an error.
+2. **Click Error Helper Button**: The 🆘 Error Helper button appears when errors are detected. Or set the button to always show in code cell.
+3. **View Analysis**: Get structured feedback including: "What Happened", "Why It Occurred", "How to Fix It", "General Example", "Prevention Tip". Analysis can be displayed as cell output or markdown cell.
+
+#### How to Use Error Chat:
+1. **After Error Analysis**: When Error Helper completes, click "Start Chat" in the popup.
+2. **Or Use Command Palette**: Press `Cmd+Shift+P` (Mac) or `Ctrl+Shift+P` (Windows/Linux) → "Start Error Helper Chat".
+3. **Ask Questions**: Type your questions in the chat panel.
+4. **Get Targeted Help**: Receive feedback based on your error context.
 
 ### Expand / Explain and Follow-up Questions
 
