@@ -70,11 +70,11 @@ npm run compile
 3. **Ask Questions**: Type your questions in the chat panel.
 4. **Get Targeted Help**: Receive feedback based on your error context.
 
-### Expand / Explain and Follow-up Questions
+### Expand/Explain and Follow-up Chat
 
 Cellmate provides additional interactive AI tools to help you better understand or refine your work.
 
-#### Expand / Explain Button
+#### Expand/Explain Button
 - This button can be configured to appear **only in feedback Markdown cells** or **in all Markdown cells**.
 - You can select the working mode in VS Code settings:
   - **Expand Mode**: Expand the summary of feedback with more detail, examples, or deeper reasoning.
@@ -83,14 +83,14 @@ Cellmate provides additional interactive AI tools to help you better understand 
     - A new *Explanation* Markdown cell will be inserted below, containing the explanation of the selected text.
 
 #### Ask Follow-up Button
-- **Where it appears**: In both *Feedback* and *Explanation* Markdown cells.
-- **What it does**: Opens a Webview panel where you can have a conversational follow-up with the AI.
+- **Where it appears**: In *Explanation* Markdown cells.
+- **What it does**: Opens a Webview panel where you can ask the AI a follow-up question.
 - **How to use**:
   1. Click **Ask Follow-up**.
   2. Type your question in the Webview panel.
   3. The AI will respond in real-time.
-
-
+> **Note**: Each follow-up is independent. The AI only uses the Explanation cell, your question, and the original feedback for context.  
+> **Future Work**: Multi-turn conversation support inside the Webview panel.
 ## 🔧 Configuration
 ### LLM Configuration
 
