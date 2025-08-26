@@ -1333,7 +1333,6 @@ ${feedback}
         const apiUrl = cfg.get<string>('apiUrl') || '';
         const apiKey = cfg.get<string>('apiKey') || '';
         const modelName = cfg.get<string>('modelName') || '';
-        const templateId = cfg.get<string>('templateId', '1');
         const useHiddenTests = cfg.get<boolean>('useHiddenTests', true);
 
         // Debug configuration
@@ -1412,12 +1411,8 @@ ${feedback}
 
           // Run tests locally (with internal timeout guard and resource copy)
           const testResult = await runLocalTest(code, test, pythonPath, 15000, resourceDirs);
-
-          // If timed out, annotate analysis to indicate potential infinite loop
-          if (testResult?.timeout) {
-            analysis += `## Test Execution Timeout\n`;
-            analysis += `- Hidden tests timed out. Your code may contain an infinite loop or long-running operation.\n\n`;
-          }
+          // log('=== test result Debug ===');
+          // log(testResult)
 
           // Parse test results and generate analysis
           if (testResult.report && testResult.report.tests) {
@@ -1452,18 +1447,24 @@ ${feedback}
               analysis += `- All ${total} tests passed!\n\n`;
             }
           } else {
-            analysis += `## Test Execution Issues\n`;
-            if (testResult.stderr) {
-              analysis += `**Error Output:** ${testResult.stderr}\n`;
+            // If timed out, annotate analysis to indicate potential infinite loop
+            if (testResult?.timeout) {
+              analysis += `## Test Execution Timeout\n`;
+              analysis += `- Hidden tests timed out. Your code may contain an infinite loop or long-running operation. Set the level as BROKEN!\n\n`;
+            } else {
+              analysis += `## Test Execution Issues\n`;
+              if (testResult.stderr) {
+                analysis += `**Error Output:** ${testResult.stderr}\n`;
+              }
+              if (testResult.stdout) {
+                analysis += `**Standard Output:** ${testResult.stdout}\n`;
+              }
+              analysis += `\nPossible causes:\n`;
+              analysis += `- Code syntax errors\n`;
+              analysis += `- Import module failures\n`;
+              analysis += `- Incomplete function definitions\n`;
+              analysis += `- Test file format issues\n`;
             }
-            if (testResult.stdout) {
-              analysis += `**Standard Output:** ${testResult.stdout}\n`;
-            }
-            analysis += `\nPossible causes:\n`;
-            analysis += `- Code syntax errors\n`;
-            analysis += `- Import module failures\n`;
-            analysis += `- Incomplete function definitions\n`;
-            analysis += `- Test file format issues\n`;
           }
         }
 

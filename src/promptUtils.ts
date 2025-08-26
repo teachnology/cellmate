@@ -42,6 +42,36 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
   const hashCommentRe = /^\s*#\s*prompt:\s*([\w\-]+)\s*$/gm;
   const blockStartRe = /<!--\s*prompt:\s*([\w\-]+):start\s*-->/g;
   const blockEndRe = /<!--\s*prompt:\s*([\w\-]+):end\s*-->/g;
+  // Track keys declared via single-line comments to detect overlap with multi-block
+  const section1Keys = new Set<string>();
+
+  // 1.5 Validate block pairing (ensure every start has an end, and no end appears without a prior start)
+  console.log('\n--- 1.5 Validate multi-block pairing ---');
+  const blockAnyRe = /<!--\s*prompt:\s*([\w\-]+):(start|end)\s*-->/g;
+  const openCounts = new Map<string, number>();
+  for (let i = 0; i < notebook.cellCount; ++i) {
+    const cell = notebook.cellAt(i);
+    const text = cell.document.getText();
+    blockAnyRe.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = blockAnyRe.exec(text)) !== null) {
+      const key = m[1];
+      const type = m[2];
+      if (type === 'start') {
+        openCounts.set(key, (openCounts.get(key) || 0) + 1);
+      } else {
+        const cnt = openCounts.get(key) || 0;
+        if (cnt <= 0) {
+          vscode.window.showWarningMessage(`Multi-block error: found end without matching start for key "${key}" in cell ${i}`);
+        }
+        openCounts.set(key, cnt - 1);
+      }
+    }
+  }
+  // const unclosedKeys = Array.from(openCounts.entries()).filter(([_, cnt]) => cnt > 0).map(([k]) => k);
+  // if (unclosedKeys.length > 0) {
+  //   vscode.window.showWarningMessage(`Multi-block error: missing end for key(s): ${unclosedKeys.join(', ')}`);
+  // }
 
   // 1. Single cell comments
   console.log('\n--- 1. Scan single cell comments ---');
@@ -55,6 +85,7 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
     // HTML comments
     while ((match = htmlCommentRe.exec(text)) !== null) {
       const key = match[1];
+      section1Keys.add(key);
       console.log(`  Found HTML comment: prompt:${key}`);
       // Only set if this key hasn't been found yet (closest to current cell takes precedence)
       if (!placeholderMap.has(key)) {
@@ -66,6 +97,7 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
     // Hash (#) comments
     while ((match = hashCommentRe.exec(text)) !== null) {
       const key = match[1];
+      section1Keys.add(key);
       console.log(`  Found hash comment: prompt:${key}`);
       // Only set if this key hasn't been found yet (closest to current cell takes precedence)
       if (!placeholderMap.has(key)) {
@@ -78,6 +110,9 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
 
   // 2. Multi-block sections (allow auto-concatenation of multiple blocks for the same key)
   console.log('\n--- 2. Scan multi-block sections ---');
+  const section2Counts = new Map<string, number>();
+  const section2Duplicates = new Set<string>();
+  const section2Keys = new Set<string>();
   for (let i = 0; i < notebook.cellCount; ++i) {
     const cell = notebook.cellAt(i);
     const text = cell.document.getText();
@@ -85,7 +120,12 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
     blockStartRe.lastIndex = 0;
     while ((startMatch = blockStartRe.exec(text)) !== null) {
       const key = startMatch[1];
+      section2Keys.add(key);
       console.log(`  Found block start: prompt:${key}:start in cell ${i}`);
+      // Count duplicates for section 2
+      const cnt = (section2Counts.get(key) || 0) + 1;
+      section2Counts.set(key, cnt);
+      if (cnt > 1) section2Duplicates.add(key);
 
       // Find the corresponding end
       let content = '';
@@ -127,13 +167,15 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
         placeholderMap.set(key, newContent);
         console.log(`    Block content for ${key}:`, newContent.substring(0, 100) + (newContent.length > 100 ? '...' : ''));
       } else {
-        console.log(`    Warning: No matching end for block ${key}`);
+        vscode.window.showWarningMessage(`Multi-block error: missing end for key "${key}" starting from cell ${i}`);
       }
     }
   }
 
   // 3. Scan special cell reference placeholders (cell:1, cell:2, ..., cell:N, cell:this, cell:-1, cell:+1)
   console.log('\n--- 3. Scan special cell reference placeholders ---');
+  const section3Counts = new Map<string, number>();
+  const section3Duplicates = new Set<string>();
   const cellRefPatterns = [
     /prompt:\s*(cell:this)/,
 
@@ -163,10 +205,27 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
             console.log(`  Found cell reference: ${key} in cell ${i} (from: ${match})`);
             // Mark the found cell reference as declared, but do not set a specific value
             placeholderMap.set(key, '');
+            const cnt = (section3Counts.get(key) || 0) + 1;
+            section3Counts.set(key, cnt);
+            if (cnt > 1) section3Duplicates.add(key);
           }
         });
       }
     }
+  }
+
+  // Show a warning if duplicates are detected in sections 1+2 overlap, 2 or 3
+  const dup2 = Array.from(section2Duplicates);
+  const dup3 = Array.from(section3Duplicates);
+  const overlap12 = Array.from(section1Keys).filter(k => section2Keys.has(k));
+  if (dup2.length > 0) {
+    vscode.window.showWarningMessage(`detected duplicate prompt key in multi-block definition: ${dup2.join(', ')}. Please do not use the same key to avoid confusion.`);
+  }
+  if (dup3.length > 0) {
+    vscode.window.showWarningMessage(`detected duplicate prompt key (cell reference): ${dup3.join(', ')}. Please do not use the same key to avoid confusion.`);
+  }
+  if (overlap12.length > 0) {
+    vscode.window.showWarningMessage(`detected overlapping prompt key used both as single-line and multi-block: ${overlap12.join(', ')}. Please avoid mixing the same key.`);
   }
 
   // 4. Record current cell index for cell:this
