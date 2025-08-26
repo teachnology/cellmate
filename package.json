@@ -40,33 +40,33 @@
       {
         "title": "CellMate • General",
         "properties": {
-          "jupyterAiFeedback.apiUrl": {
+          "CellMate.apiUrl": {
             "type": "string",
             "description": "API URL for the LLM service",
             "order": 0
           },
-          "jupyterAiFeedback.apiKey": {
+          "CellMate.apiKey": {
             "type": "string",
             "description": "API key for the LLM service",
             "order": 1
           },
-          "jupyterAiFeedback.modelName": {
+          "CellMate.modelName": {
             "type": "string",
             "default": "gpt-oss:120b",
             "description": "The model name used for AI feedback",
             "order": 2
           },
-          "jupyterAiFeedback.templateId": {
+          "CellMate.templateId": {
             "type": "string",
             "default": "standard_feedback",
             "description": "Template ID to use for AI feedback (fetched from GitHub repository)"
           },
-          "jupyterAiFeedback.useHiddenTests": {
+          "CellMate.useHiddenTests": {
             "type": "boolean",
             "default": true,
             "description": "Whether to use hidden tests to enhance the prompt with test analysis"
           },
-          "jupyterAiFeedback.errorHelperOutput": {
+          "CellMate.errorHelperOutput": {
             "type": "string",
             "default": "markdown",
             "enum": [
@@ -79,13 +79,13 @@
             ],
             "description": "Choose how Error Helper displays its analysis"
           },
-          "jupyterAiFeedback.errorHelper.alwaysShow": {
+          "CellMate.errorHelper.alwaysShow": {
             "type": "boolean",
             "default": false,
             "description": "Always show Error Helper button, even when there are no errors in the cell",
             "order": 15
           },
-          "jupyterAiFeedback.feedbackMode": {
+          "CellMate.feedbackMode": {
             "type": "string",
             "default": "Expand",
             "enum": [
@@ -98,7 +98,7 @@
             ],
             "description": "Choose how the feedback will be processed by the AI"
           },
-          "jupyterAiFeedback.showButtonInAllMarkdown": {
+          "CellMate.showButtonInAllMarkdown": {
             "type": "boolean",
             "default": false,
             "description": "Show the Expand/Explain button in all markdown cells (not just those containing feedback)"
@@ -108,7 +108,7 @@
       {
         "title": "CellMate • Speech-to-Text",
         "properties": {
-          "jupyterAiFeedback.speechProvider": {
+          "CellMate.speechProvider": {
             "type": "string",
             "default": "local",
             "enum": [
@@ -119,41 +119,41 @@
             "description": "Speech engine: offline *local* model (default) or cloud providers.",
             "order": 3
           },
-          "jupyterAiFeedback.speechLocal.language": {
+          "CellMate.speechLocal.language": {
             "type": "string",
             "default": "en",
             "description": "Language hint for the local model (ISO-639-1).",
             "order": 4
           },
-          "jupyterAiFeedback.speechOpenai.apiKey": {
+          "CellMate.speechOpenai.apiKey": {
             "type": "string",
             "description": "OpenAI API key (`sk-…`).",
             "order": 5
           },
-          "jupyterAiFeedback.speechOpenai.modelId": {
+          "CellMate.speechOpenai.modelId": {
             "type": "string",
             "default": "whisper-1",
             "description": "Model ID (e.g. whisper-1).",
             "order": 6
           },
-          "jupyterAiFeedback.speechOpenai.language": {
+          "CellMate.speechOpenai.language": {
             "type": "string",
             "default": "en",
             "description": "Language code for OpenAI.",
             "order": 7
           },
-          "jupyterAiFeedback.speechAzure.apiKey": {
+          "CellMate.speechAzure.apiKey": {
             "type": "string",
             "description": "Azure Speech API key.",
             "order": 8
           },
-          "jupyterAiFeedback.speechAzure.region": {
+          "CellMate.speechAzure.region": {
             "type": "string",
             "default": "westeurope",
             "description": "Azure region.",
             "order": 9
           },
-          "jupyterAiFeedback.speechAzure.language": {
+          "CellMate.speechAzure.language": {
             "type": "string",
             "default": "en-US",
             "description": "Language code for Azure.",
@@ -164,43 +164,43 @@
     ],
     "commands": [
       {
-        "command": "jupyterAiFeedback.sendNotebookCell",
+        "command": "CellMate.sendNotebookCell",
         "title": "Send Notebook Cell to AI Feedback"
       },
       {
-        "command": "jupyterAiFeedback.errorHelper",
+        "command": "CellMate.errorHelper",
         "title": "Error Helper - Get help with cell errors"
       },
       {
-        "command": "jupyterAiFeedback.startErrorChat",
+        "command": "CellMate.startErrorChat",
         "title": "Start Error Helper Chat"
       },
       {
-        "command": "jupyterAiFeedback.listTemplates",
+        "command": "CellMate.listTemplates",
         "title": "List Available Templates"
       },
       {
-        "command": "jupyterAiFeedback.listExercises",
+        "command": "CellMate.listExercises",
         "title": "List Available Exercises"
       },
       {
-        "command": "jupyterAiFeedback.selectTemplate",
+        "command": "CellMate.selectTemplate",
         "title": "choose Prompt template"
       },
       {
-        "command": "jupyterAiFeedback.syncGitRepo",
+        "command": "CellMate.syncGitRepo",
         "title": "Sync GitHub Repository"
       },
       {
-        "command": "jupyterAiFeedback.showPromptContent",
+        "command": "CellMate.showPromptContent",
         "title": "Show Prompt Content"
       },
       {
-        "command": "jupyterAiFeedback.toggleRecording",
+        "command": "CellMate.toggleRecording",
         "title": "🎙️ Toggle Speech-to-Text Recording"
       },
       {
-        "command": "jupyterAiFeedback.askFollowUpFromButton",
+        "command": "CellMate.askFollowUpFromButton",
         "title": "Ask Follow-up Question (via Button)"
       }
     ],
@@ -209,23 +209,23 @@
         "viewType": "*",
         "items": [
           {
-            "command": "jupyterAiFeedback.errorHelper",
+            "command": "CellMate.errorHelper",
             "alignment": "right",
             "priority": 200
           },
           {
-            "command": "jupyterAiFeedback.sendNotebookCell",
+            "command": "CellMate.sendNotebookCell",
             "alignment": "right",
             "priority": 100
           },
           {
-            "command": "jupyterAiFeedback.toggleRecording",
+            "command": "CellMate.toggleRecording",
             "alignment": "left",
             "priority": 100
           },
           {
             "when": "notebookCellKind == markup",
-            "command": "jupyterAiFeedback.explainMarkdownCell",
+            "command": "CellMate.explainMarkdownCell",
             "alignment": "right",
             "priority": 100
           }

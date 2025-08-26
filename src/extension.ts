@@ -819,14 +819,14 @@ async function callLLMAPI(prompt: string, config: LLMConfig): Promise<string> {
 
 // Read LLM configuration from settings
 function readLLMConfig(): LLMConfig | null {
-  const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+  const cfg = vscode.workspace.getConfiguration('CellMate');
   const apiUrl = cfg.get<string>('apiUrl') || '';
   const apiKey = cfg.get<string>('apiKey') || '';
   const modelName = cfg.get<string>('modelName') || '';
 
   if (!apiUrl || !apiKey || !modelName) {
     vscode.window.showErrorMessage(
-      'Please configure jupyterAiFeedback.apiUrl, apiKey, and modelName in settings'
+      'Please configure CellMate.apiUrl, apiKey, and modelName in settings'
     );
     return null;
   }
@@ -1003,7 +1003,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     provideCellStatusBarItems(cell) {
       const items = [];
       if (cell.document.languageId === 'python') {
-          const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+          const cfg = vscode.workspace.getConfiguration('CellMate');
           const alwaysShowErrorHelper = cfg.get<boolean>('errorHelper.alwaysShow', false);
 
           const cellOutput = getCellOutput(cell);
@@ -1019,7 +1019,7 @@ export function activate(ctx: vscode.ExtensionContext) {
             );
             errorHelperItem.priority = 200;
             errorHelperItem.command = {
-              command: 'jupyterAiFeedback.errorHelper',
+              command: 'CellMate.errorHelper',
               title: 'Error Helper',
               arguments: [cell]
             };
@@ -1036,7 +1036,7 @@ export function activate(ctx: vscode.ExtensionContext) {
           );
           item.priority = 100;
           item.command = {
-            command: 'jupyterAiFeedback.sendNotebookCell',
+            command: 'CellMate.sendNotebookCell',
             title: 'Send to AI',
             arguments: [cell]
           };
@@ -1049,19 +1049,19 @@ export function activate(ctx: vscode.ExtensionContext) {
         );
         speechItem.priority = 100;
         speechItem.command = {
-          command: 'jupyterAiFeedback.toggleRecording',
+          command: 'CellMate.toggleRecording',
           title: 'Speech to Text',
           arguments: [cell]
         };
         items.push(speechItem);
       }
 
-      const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback')
+      const cfg = vscode.workspace.getConfiguration('CellMate')
       const showAll = cfg.get<boolean>('showButtonInAllMarkdown')
       const text = cell.document.getText().toLowerCase()
       const containsFeedback = text.includes('**feedback**') || text.includes('**🤖feedback expansion**')
       if(cell.kind === vscode.NotebookCellKind.Markup && (showAll || containsFeedback)){
-        const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+        const cfg = vscode.workspace.getConfiguration('CellMate');
         const mode = cfg.get<string>('feedbackMode');
 
         const label =
@@ -1074,7 +1074,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         vscode.NotebookCellStatusBarAlignment.Right
         );
         markdownItem.command = {
-          command : 'jupyterAiFeedback.explainMarkdownCell',
+          command : 'CellMate.explainMarkdownCell',
           title: 'Expand or Explain Feedback Markdown',
           arguments:[cell]
         }
@@ -1093,7 +1093,7 @@ export function activate(ctx: vscode.ExtensionContext) {
   // Error Helper command - with intelligent state handling
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
-      'jupyterAiFeedback.errorHelper',
+      'CellMate.errorHelper',
       async (cell: vscode.NotebookCell) => {
         const editor = vscode.window.activeNotebookEditor;
         if (!editor) {
@@ -1146,7 +1146,7 @@ export function activate(ctx: vscode.ExtensionContext) {
           );
 
           if (action === 'Open AI Feedback') {
-            await vscode.commands.executeCommand('jupyterAiFeedback.sendNotebookCell', cell);
+            await vscode.commands.executeCommand('CellMate.sendNotebookCell', cell);
           }
           return;
         }
@@ -1205,7 +1205,7 @@ export function activate(ctx: vscode.ExtensionContext) {
           const feedback = await callLLMAPI(prompt, config);
 
           // Check output mode setting
-          const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+          const cfg = vscode.workspace.getConfiguration('CellMate');
           const outputMode = cfg.get<string>('errorHelperOutput', 'markdown');
 
           console.log('Using output mode:', outputMode);
@@ -1259,7 +1259,7 @@ ${feedback}
   // Start Error Chat command
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
-      'jupyterAiFeedback.startErrorChat',
+      'CellMate.startErrorChat',
       async (cell?: vscode.NotebookCell, errorHelperFeedback?: string) => {
         const config = readLLMConfig();
         if (!config) return;
@@ -1321,7 +1321,7 @@ ${feedback}
   // Command executed when button is clicked
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
-      'jupyterAiFeedback.sendNotebookCell',
+      'CellMate.sendNotebookCell',
       async (cell: vscode.NotebookCell) => {
         const editor = vscode.window.activeNotebookEditor;
         if (!editor) {
@@ -1329,7 +1329,7 @@ ${feedback}
         }
 
         // Read user configuration
-        const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+        const cfg = vscode.workspace.getConfiguration('CellMate');
         const apiUrl = cfg.get<string>('apiUrl') || '';
         const apiKey = cfg.get<string>('apiKey') || '';
         const modelName = cfg.get<string>('modelName') || '';
@@ -1337,18 +1337,17 @@ ${feedback}
 
         // Debug configuration
         // log('=== Configuration Debug ===');
-        // log('All jupyterAiFeedback config:', cfg);
+        // log('All CellMate config:', cfg);
         // log('useHiddenTests raw value:', cfg.get('useHiddenTests'));
         // log('useHiddenTests with default:', useHiddenTests);
         // log('Configuration source:', cfg.inspect('useHiddenTests'));
         // log('=== End Debug ===');
-        // log('templateId:', templateId);
         // log('useHiddenTests:', useHiddenTests);
         // log('modelName:', modelName);
 
         if (!apiUrl || !apiKey || !modelName) {
           return vscode.window.showErrorMessage(
-            'Please configure jupyterAiFeedback.apiUrl, apiKey, and modelName in settings'
+            'Please configure CellMate.apiUrl, apiKey, and modelName in settings'
           );
         }
         // Get code from cell
@@ -1611,7 +1610,7 @@ ${feedback}
   // Template management commands
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
-      'jupyterAiFeedback.listTemplates',
+      'CellMate.listTemplates',
       async () => {
         await syncGitRepo();
         const templates = await listLocalTemplates();
@@ -1633,7 +1632,7 @@ ${feedback}
   // Exercise management command
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
-      'jupyterAiFeedback.listExercises',
+      'CellMate.listExercises',
       async () => {
         await syncGitRepo();
         const exercises = await listLocalExercises();
@@ -1654,7 +1653,7 @@ ${feedback}
 
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
-      'jupyterAiFeedback.selectTemplate',
+      'CellMate.selectTemplate',
       async () => {
         await syncGitRepo();
         const templates = await listLocalTemplates();
@@ -1672,7 +1671,7 @@ ${feedback}
         });
         if (pick) {
           // 写入配置
-          await vscode.workspace.getConfiguration('jupyterAiFeedback')
+          await vscode.workspace.getConfiguration('CellMate')
             .update('templateId', pick.label, vscode.ConfigurationTarget.Global);
           vscode.window.showInformationMessage(`Selected template: ${pick.label}`);
         }
@@ -1683,7 +1682,7 @@ ${feedback}
   // Sync GitHub repository command
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
-      'jupyterAiFeedback.syncGitRepo',
+      'CellMate.syncGitRepo',
       async () => {
         try {
           vscode.window.showInformationMessage('Syncing GitHub repository...');
@@ -1700,7 +1699,7 @@ ${feedback}
   // Show prompt content command
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
-      'jupyterAiFeedback.showPromptContent',
+      'CellMate.showPromptContent',
       async () => {
         try {
           await syncGitRepo();
@@ -1737,7 +1736,7 @@ ${feedback}
 
   // Speech-to-Text logic
   ctx.subscriptions.push(
-    vscode.commands.registerCommand('jupyterAiFeedback.toggleRecording', async (cell: vscode.NotebookCell) => {
+    vscode.commands.registerCommand('CellMate.toggleRecording', async (cell: vscode.NotebookCell) => {
       await toggleRecording(cell);
     })
   );
@@ -1794,7 +1793,7 @@ function getExplanationCtx(cellUri: string) {
   // Markdown cell
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
-      'jupyterAiFeedback.explainMarkdownCell',
+      'CellMate.explainMarkdownCell',
       async(cell: vscode.NotebookCell) => {
         const editor = vscode.window.activeNotebookEditor;
         if (!editor) {
@@ -1807,7 +1806,7 @@ function getExplanationCtx(cellUri: string) {
           return;
         }
 
-        const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+        const cfg = vscode.workspace.getConfiguration('CellMate');
         const mode = cfg.get<string>('feedbackMode');
         const apiUrl = cfg.get<string>('apiUrl') || '';
         const apiKey = cfg.get<string>('apiKey') || '';
@@ -1957,7 +1956,7 @@ function getExplanationCtx(cellUri: string) {
 
   // follow up question button
   ctx.subscriptions.push(
-    vscode.commands.registerCommand('jupyterAiFeedback.askFollowUpFromButton', async (cell: vscode.NotebookCell) => {
+    vscode.commands.registerCommand('CellMate.askFollowUpFromButton', async (cell: vscode.NotebookCell) => {
       const editor = vscode.window.activeNotebookEditor;
       if (!editor) {
         return vscode.window.showErrorMessage('No active notebook editor');
@@ -2273,7 +2272,7 @@ function getExplanationCtx(cellUri: string) {
             .replace('{{wholeFeedback}}', wholeFeedback)
             .replace('{{followupQuestion}}', question);
 
-          const cfg = vscode.workspace.getConfiguration('jupyterAiFeedback');
+          const cfg = vscode.workspace.getConfiguration('CellMate');
           const apiUrl = cfg.get<string>('apiUrl') || '';
           const apiKey = cfg.get<string>('apiKey') || '';
           const modelName = cfg.get<string>('modelName') || '';
@@ -2306,7 +2305,7 @@ function getExplanationCtx(cellUri: string) {
             '💬 Ask follow-up',
             vscode.NotebookCellStatusBarAlignment.Right
           );
-          item.command = 'jupyterAiFeedback.askFollowUpFromButton';
+          item.command = 'CellMate.askFollowUpFromButton';
           item.tooltip = 'Ask a follow-up question about this explanation';
           items.push(item);
         };
@@ -2317,7 +2316,7 @@ function getExplanationCtx(cellUri: string) {
             '💬 Ask follow-up',
             vscode.NotebookCellStatusBarAlignment.Right
           );
-          item.command = 'jupyterAiFeedback.askFollowUpFromButton';
+          item.command = 'CellMate.askFollowUpFromButton';
           item.tooltip = 'Ask a follow-up question about this explanation';
           items.push(item);
         }
