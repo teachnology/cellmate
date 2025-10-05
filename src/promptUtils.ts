@@ -38,6 +38,9 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
   console.log('Total cells:', notebook.cellCount);
 
   const placeholderMap = new Map<string, string>();
+  let hadWarning = false;
+  // Track the nearest selection for each key (by distance from current cell)
+  const chosen = new Map<string, { distance: number, value: string }>();
   const htmlCommentRe = /<!--\s*prompt:\s*([\w\-]+)\s*-->/g;
   const hashCommentRe = /^\s*#\s*prompt:\s*([\w\-]+)\s*$/gm;
   const blockStartRe = /<!--\s*prompt:\s*([\w\-]+):start\s*-->/g;
@@ -63,6 +66,7 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
         const cnt = openCounts.get(key) || 0;
         if (cnt <= 0) {
           vscode.window.showWarningMessage(`Multi-block error: found end without matching start for key "${key}" in cell ${i}`);
+          hadWarning = true;
         }
         openCounts.set(key, cnt - 1);
       }
@@ -87,11 +91,14 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
       const key = match[1];
       section1Keys.add(key);
       console.log(`  Found HTML comment: prompt:${key}`);
-      // Only set if this key hasn't been found yet (closest to current cell takes precedence)
-      if (!placeholderMap.has(key)) {
-        // Extract the content after the comment, not the whole cell
-        const afterComment = text.substring(match.index + match[0].length).trim();
-        placeholderMap.set(key, afterComment);
+      // Use nearest-from-current selection strategy
+      const afterComment = text.substring(match.index + match[0].length).trim();
+      const distance = currentCellIdx - i;
+      if (distance >= 0) {
+        const prev = chosen.get(key);
+        if (!prev || distance < prev.distance) {
+          chosen.set(key, { distance, value: afterComment });
+        }
       }
     }
     // Hash (#) comments
@@ -99,37 +106,52 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
       const key = match[1];
       section1Keys.add(key);
       console.log(`  Found hash comment: prompt:${key}`);
-      // Only set if this key hasn't been found yet (closest to current cell takes precedence)
-      if (!placeholderMap.has(key)) {
-        // Extract the content after the comment, not the whole cell
-        const afterComment = text.substring(match.index + match[0].length).trim();
-        placeholderMap.set(key, afterComment);
+      const afterComment = text.substring(match.index + match[0].length).trim();
+      const distance = currentCellIdx - i;
+      if (distance >= 0) {
+        const prev = chosen.get(key);
+        if (!prev || distance < prev.distance) {
+          chosen.set(key, { distance, value: afterComment });
+        }
       }
     }
   }
 
-  // 2. Multi-block sections (allow auto-concatenation of multiple blocks for the same key)
-  console.log('\n--- 2. Scan multi-block sections ---');
+  // 2. Multi-block sections (nearest-above block selection + duplicates warning)
+  console.log('\n--- 2. Scan multi-block sections (nearest-above) ---');
+  // 2.a Count duplicates across the whole notebook
   const section2Counts = new Map<string, number>();
   const section2Duplicates = new Set<string>();
   const section2Keys = new Set<string>();
   for (let i = 0; i < notebook.cellCount; ++i) {
     const cell = notebook.cellAt(i);
     const text = cell.document.getText();
+    let mStart: RegExpExecArray | null;
+    blockStartRe.lastIndex = 0;
+    while ((mStart = blockStartRe.exec(text)) !== null) {
+      const k = mStart[1];
+      section2Keys.add(k);
+      const cnt = (section2Counts.get(k) || 0) + 1;
+      section2Counts.set(k, cnt);
+      if (cnt > 1) section2Duplicates.add(k);
+    }
+  }
+  // 2.b From current cell upwards, pick the nearest block start per key
+  const processedBlockKeys = new Set<string>();
+  for (let i = currentCellIdx; i >= 0; --i) {
+    const cell = notebook.cellAt(i);
+    const text = cell.document.getText();
     let startMatch: RegExpExecArray | null;
     blockStartRe.lastIndex = 0;
     while ((startMatch = blockStartRe.exec(text)) !== null) {
       const key = startMatch[1];
-      section2Keys.add(key);
-      console.log(`  Found block start: prompt:${key}:start in cell ${i}`);
-      // Count duplicates for section 2
-      const cnt = (section2Counts.get(key) || 0) + 1;
-      section2Counts.set(key, cnt);
-      if (cnt > 1) section2Duplicates.add(key);
+      if (processedBlockKeys.has(key)) continue;
+      console.log(`  Considering block start: prompt:${key}:start in cell ${i}`);
 
-      // Find the corresponding end
+      // Try to find matching end
       let content = '';
       let foundEnd = false;
+      let crossedCurrent = false;
       console.log(`    Searching for end marker across cells starting from cell ${i}`);
       for (let j = i; j < notebook.cellCount; ++j) {
         const c = notebook.cellAt(j);
@@ -137,39 +159,57 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
         console.log(`    Checking cell ${j}:`, t.substring(0, 100) + (t.length > 100 ? '...' : ''));
 
         if (j === i) {
-          // Content after start marker
           const afterStart = t.split(startMatch[0])[1] || '';
-          content += afterStart + '\n';
-          console.log(`    Added start cell content:`, afterStart.substring(0, 50) + (afterStart.length > 50 ? '...' : ''));
-        } else {
-          // Check for end
+          // Check if end appears in the same cell after start
           blockEndRe.lastIndex = 0;
-          let endMatch;
-          if ((endMatch = blockEndRe.exec(t)) !== null && endMatch[1] === key) {
-            // Content before end marker
-            const beforeEnd = t.split(endMatch[0])[0] || '';
+          const endInSame = blockEndRe.exec(afterStart);
+          if (endInSame && endInSame[1] === key) {
+            const beforeEnd = afterStart.split(endInSame[0])[0] || '';
             content += beforeEnd + '\n';
             foundEnd = true;
-            console.log(`    Found block end: prompt:${key}:end in cell ${j}`);
-            console.log(`    Added end cell content:`, beforeEnd.substring(0, 50) + (beforeEnd.length > 50 ? '...' : ''));
+          } else {
+            content += afterStart + '\n';
+          }
+        } else {
+          blockEndRe.lastIndex = 0;
+          const endMatch = blockEndRe.exec(t);
+          if (endMatch && endMatch[1] === key) {
+            if (j >= currentCellIdx) {
+              crossedCurrent = true;
+            } else {
+              const beforeEnd = t.split(endMatch[0])[0] || '';
+              content += beforeEnd + '\n';
+              foundEnd = true;
+            }
             break;
           } else {
-            // If this cell has no end marker, add the entire cell's content
             content += t + '\n';
-            console.log(`    Added full cell ${j} content:`, t.substring(0, 50) + (t.length > 50 ? '...' : ''));
           }
         }
       }
-      if (foundEnd) {
-        // Auto-concatenate multi-block
-        const prev = placeholderMap.get(key) || '';
-        const newContent = prev + content.trim() + '\n';
-        placeholderMap.set(key, newContent);
-        console.log(`    Block content for ${key}:`, newContent.substring(0, 100) + (newContent.length > 100 ? '...' : ''));
-      } else {
-        vscode.window.showWarningMessage(`Multi-block error: missing end for key "${key}" starting from cell ${i}`);
+      if (crossedCurrent) {
+        vscode.window.showWarningMessage(`Multi-block warning: key "${key}" has start above and end below the current cell.`);
+        hadWarning = true;
       }
+      if (foundEnd) {
+        const distance = currentCellIdx - i;
+        const prev = chosen.get(key);
+        const value = content.trim() + '\n';
+        if (!prev || distance < prev.distance) {
+          chosen.set(key, { distance, value });
+        }
+      } else {
+        // No matching end found at all
+        vscode.window.showWarningMessage(`Multi-block error: missing end for key "${key}" starting from cell ${i}`);
+        hadWarning = true;
+      }
+      processedBlockKeys.add(key);
     }
+  }
+
+  // Apply nearest selections from section 1 and 2 into placeholderMap
+  for (const [k, sel] of chosen.entries()) {
+    placeholderMap.set(k, sel.value);
   }
 
   // 3. Scan special cell reference placeholders (cell:1, cell:2, ..., cell:N, cell:this, cell:-1, cell:+1)
@@ -177,33 +217,30 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
   const section3Counts = new Map<string, number>();
   const section3Duplicates = new Set<string>();
   const cellRefPatterns = [
-    /prompt:\s*(cell:this)/,
+    /prompt:\s*(cell:this)/g,
 
     // With type filter, must appear after prompt marker
-    /prompt:\s*(cell:-?\d+:(md|cd))/, // # prompt: cell:-1:md, <!-- prompt: cell:+1:cd -->
-    /prompt:\s*(cell:\+\d+:(md|cd))/, // # prompt: cell:+1:md, <!-- prompt: cell:+2:cd -->
-    /prompt:\s*(cell:[1-9]\d*:(md|cd))/, // # prompt: cell:1:md, <!-- prompt: cell:2:cd -->
+    /prompt:\s*(cell:-?\d+:(md|cd))/g, // # prompt: cell:-1:md, <!-- prompt: cell:+1:cd -->
+    /prompt:\s*(cell:\+\d+:(md|cd))/g, // # prompt: cell:+1:md, <!-- prompt: cell:+2:cd -->
+    /prompt:\s*(cell:[1-9]\d*:(md|cd))/g, // # prompt: cell:1:md, <!-- prompt: cell:2:cd -->
 
     // Without type, no colon allowed after, must appear after prompt marker
-    /prompt:\s*(cell:-?\d+(?!:))/, // # prompt: cell:-1, <!-- prompt: cell:+1 -->
-    /prompt:\s*(cell:\+\d+(?!:))/, // # prompt: cell:+1, <!-- prompt: cell:+2 -->
-    /prompt:\s*(cell:[1-9]\d*(?!:))/ // # prompt: cell:1, <!-- prompt: cell:2 -->
+    /prompt:\s*(cell:-?\d+(?!:))/g, // # prompt: cell:-1, <!-- prompt: cell:+1 -->
+    /prompt:\s*(cell:\+\d+(?!:))/g, // # prompt: cell:+1, <!-- prompt: cell:+2 -->
+    /prompt:\s*(cell:[1-9]\d*(?!:))/g // # prompt: cell:1, <!-- prompt: cell:2 -->
   ];
 
-  for (let i = 0; i < notebook.cellCount; ++i) {
-    const cell = notebook.cellAt(i);
+  // Only scan the current cell for cell references
+  if (currentCellIdx >= 0 && currentCellIdx < notebook.cellCount) {
+    const cell = notebook.cellAt(currentCellIdx);
     const text = cell.document.getText();
-
     for (const pattern of cellRefPatterns) {
       const matches = text.match(pattern);
       if (matches) {
         matches.forEach(match => {
-          // 提取 prompt: 后面的实际 key
           const key = match.replace(/^prompt:\s*/, '');
-          // 只处理模板中出现的 key
           if (!placeholderKeys || placeholderKeys.has(key)) {
-            console.log(`  Found cell reference: ${key} in cell ${i} (from: ${match})`);
-            // Mark the found cell reference as declared, but do not set a specific value
+            console.log(`  Found cell reference: ${key} in cell ${currentCellIdx} (from: ${match})`);
             placeholderMap.set(key, '');
             const cnt = (section3Counts.get(key) || 0) + 1;
             section3Counts.set(key, cnt);
@@ -220,12 +257,19 @@ export function extractPromptPlaceholders(notebook: vscode.NotebookDocument, cur
   const overlap12 = Array.from(section1Keys).filter(k => section2Keys.has(k));
   if (dup2.length > 0) {
     vscode.window.showWarningMessage(`detected duplicate prompt key in multi-block definition: ${dup2.join(', ')}. Please do not use the same key to avoid confusion.`);
+    hadWarning = true;
   }
   if (dup3.length > 0) {
     vscode.window.showWarningMessage(`detected duplicate prompt key (cell reference): ${dup3.join(', ')}. Please do not use the same key to avoid confusion.`);
+    hadWarning = true;
   }
-  if (overlap12.length > 0) {
-    vscode.window.showWarningMessage(`detected overlapping prompt key used both as single-line and multi-block: ${overlap12.join(', ')}. Please avoid mixing the same key.`);
+  // if (overlap12.length > 0) {
+  //   vscode.window.showWarningMessage(`detected overlapping prompt key used both as single-line and multi-block: ${overlap12.join(', ')}. Please avoid mixing the same key.`);
+  // }
+
+  // If any warning occurred, abort to prevent downstream processing
+  if (hadWarning) {
+    throw new Error('Prompt extraction aborted due to warnings. Please resolve warnings and try again.');
   }
 
   // 4. Record current cell index for cell:this
@@ -352,7 +396,7 @@ export function fillPromptTemplate(template: string, placeholderMap: Map<string,
   console.log('=== fillPromptTemplate END ===\n');
 
   // combine multiple empty lines into one
-  result = result.replace(/([ \t]*\n){3,}/g, '\n\n');
-
+  // result = result.replace(/([ \t]*\n){3,}/g, '\n\n');
+  result = result.replace(/[ \t]*(\r?\n)(?:[ \t]*\r?\n)+/g, '$1$1');
   return result;
 } 

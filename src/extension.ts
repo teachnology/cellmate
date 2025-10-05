@@ -34,6 +34,8 @@ export function log(...args:any[]){ chan.appendLine(`[${new Date().toISOString()
 export function showLog(preserveFocus=true){ chan.show(preserveFocus); }
 
 let recording = false;
+// Throttle: restrict 'CellMate.sendNotebookCell' to once per 3 seconds
+let lastSendNotebookCellTs = 0;
 
 // LLM API configuration interface
 interface LLMConfig {
@@ -1328,6 +1330,14 @@ ${feedback}
           return vscode.window.showErrorMessage('No active Notebook editor');
         }
 
+        // Throttle rapid clicks: allow once per 3 seconds
+        const now = Date.now();
+        if (now - lastSendNotebookCellTs < 3000) {
+          vscode.window.showWarningMessage('Please wait 3 seconds before sending again.');
+          return;
+        }
+        lastSendNotebookCellTs = now;
+
         // Read user configuration
         const cfg = vscode.workspace.getConfiguration('CellMate');
         const apiUrl = cfg.get<string>('apiUrl') || '';
@@ -1411,7 +1421,7 @@ ${feedback}
           // Run tests locally (with internal timeout guard and resource copy)
           const testResult = await runLocalTest(code, test, pythonPath, 15000, resourceDirs);
           // log('=== test result Debug ===');
-          // log(testResult)
+          log(testResult)
 
           // Parse test results and generate analysis
           if (testResult.report && testResult.report.tests) {
@@ -1508,7 +1518,7 @@ ${feedback}
         const system_role = "You are a Python teaching assistant for programming beginners. Given the uploaded code and optional hidden test results, offer concise code suggestions on improvement and fixing output errors without directly giving solutions. Be encouraging and constructive in your feedback. ";
 
         const fullPrompt = system_role + prompt;
-        // log("fullPrompt:", fullPrompt)
+        log("fullPrompt:", fullPrompt)
 
         // Call the LLM interface
         let feedback: string;
