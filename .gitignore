@@ -5,3 +5,4 @@ out/
 .env
 package-lock.json
 test.ipynb
+dist/*
