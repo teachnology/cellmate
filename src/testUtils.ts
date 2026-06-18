@@ -193,7 +193,7 @@ export function extractErrorMessage(test: any): string {
  * Extract test input from assertion message
  */
 export function extractTestInput(assertionMsg: string): string {
-  // 匹配 func(args) 形式，支持多参数、负数、小数、字符串、列表等
+  // Match func(args) format, supporting multiple parameters, negative numbers, floats, strings, lists, etc.
   const m = assertionMsg.match(/([a-zA-Z_][a-zA-Z0-9_]*)\(([^\)]*)\)/);
   if (m) return `${m[1]}(${m[2]})`;
   return '';
@@ -222,7 +222,7 @@ export function generateSuggestions(failedTests: any[], metadata: any): string[]
 export function extractAssertionLine(test: any): string {
   const longreprObj = test.call?.longrepr ?? test.longrepr ?? '';
 
-  // ---- case ① longrepr 是对象（pytest-json-report ≥ 3） ----
+  // ---- case 1: longrepr is an object (pytest-json-report >= 3) ----
   if (typeof longreprObj === 'object' && longreprObj) {
     const msg = longreprObj.reprcrash?.message;
     if (msg) return msg.trim();
@@ -235,7 +235,7 @@ export function extractAssertionLine(test: any): string {
     return (src ?? lrText.split('\n')[0] ?? '').trim();
   }
 
-  // ---- case ② longrepr 是字符串 ----
+  // ---- case 2: longrepr is a string ----
   const lines = (longreprObj as string).split('\n');
   const runtime = lines.find(l => /AssertionError:/i.test(l));
   if (runtime) return runtime.trim();

@@ -197,7 +197,7 @@
       },
       {
         "command": "CellMate.toggleRecording",
-        "title": "🎙️ Toggle Speech-to-Text Recording"
+        "title": "Toggle Speech-to-Text Recording"
       },
       {
         "command": "CellMate.askFollowUpFromButton",

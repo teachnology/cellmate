@@ -300,7 +300,7 @@ export function fillPromptTemplate(template: string, placeholderMap: Map<string,
       if (key.startsWith('cell:')) {
         const currentIdx = Number(placeholderMap.get('__currentCellIdx__') || 0);
         console.log(`    Processing cell reference: ${key}, current index: ${currentIdx}`);
-        // 1. 相对cell: cell:+N:md / cell:-N:cd
+        // 1. Relative cell: cell:+N:md / cell:-N:cd
         if ((cellMatch = key.match(/^cell:([+-]\d+):(md|cd)$/))) {
           const rel = Number(cellMatch[1]);
           const type = cellMatch[2];
@@ -342,7 +342,7 @@ export function fillPromptTemplate(template: string, placeholderMap: Map<string,
             return '';
           }
         }
-        // 2. 简单相对cell: cell:-1, cell:+1 (不区分类型)
+        // 2. Simple relative cell: cell:-1, cell:+1 (type agnostic)
         else if ((cellMatch = key.match(/^cell:([+-]\d+)$/))) {
           const rel = Number(cellMatch[1]);
           const targetIdx = currentIdx + rel;
@@ -355,10 +355,10 @@ export function fillPromptTemplate(template: string, placeholderMap: Map<string,
             return '';
           }
         }
-        // 3. 绝对cell: cell:N / cell:N:md / cell:N:cd
+        // 3. Absolute cell: cell:N / cell:N:md / cell:N:cd
         else if ((cellMatch = key.match(/^cell:(\d+)(?::(md|cd))?$/))) {
           const absIdx = Number(cellMatch[1]);
-          const type = cellMatch[2]; // 可能为 undefined
+          const type = cellMatch[2]; // May be undefined
           let foundIdx = -1, count = 0;
           for (let i = 0; i < notebook.cellCount; ++i) {
             const cell = notebook.cellAt(i);

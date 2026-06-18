@@ -669,7 +669,7 @@ async function addAnalysisToCellOutput(cell: vscode.NotebookCell, analysis: stri
 
     // Create markdown-formatted analysis
     const formattedAnalysis = `
-## 🆘 Error Helper Analysis
+## Error Helper Analysis
 
 ${analysis}
 
@@ -721,7 +721,7 @@ ${analysis}
     const isMac = process.platform === 'darwin';
     const shortcut = isMac ? 'Cmd+Shift+P' : 'Ctrl+Shift+P';
 
-    const content = `# **🆘 Error Helper**
+    const content = `# **Error Helper**
 
 ${analysis}
 
@@ -921,14 +921,14 @@ function findExistingErrorHelperFeedback(cell: vscode.NotebookCell): string | un
       const content = nextCell.document.getText();
 
       // Check if this is an Error Helper markdown cell
-      if (content.includes('🆘 Error Helper') || content.includes('**🆘 Error Helper**')) {
+      if (content.includes('Error Helper') || content.includes('**Error Helper**')) {
         // Extract the feedback content (skip the header)
         const lines = content.split('\n');
         const feedbackLines = [];
         let foundContent = false;
 
         for (const line of lines) {
-          if (line.includes('🆘 Error Helper')) {
+          if (line.includes('Error Helper')) {
             foundContent = true;
             continue;
           }
@@ -955,14 +955,14 @@ function findExistingErrorHelperFeedback(cell: vscode.NotebookCell): string | un
           const decoder = new TextDecoder();
           const content = decoder.decode(item.data);
 
-          if (content.includes('🆘 Error Helper Analysis')) {
+          if (content.includes('Error Helper Analysis')) {
             // Extract the analysis content
             const lines = content.split('\n');
             const analysisLines = [];
             let foundContent = false;
 
             for (const line of lines) {
-              if (line.includes('🆘 Error Helper Analysis')) {
+              if (line.includes('Error Helper Analysis')) {
                 foundContent = true;
                 continue;
               }
@@ -1016,7 +1016,7 @@ export function activate(ctx: vscode.ExtensionContext) {
 
           if (shouldShowErrorHelper) {
             const errorHelperItem = new vscode.NotebookCellStatusBarItem(
-              '🆘 Error Helper',
+              'Error Helper',
               vscode.NotebookCellStatusBarAlignment.Right
             );
             errorHelperItem.priority = 200;
@@ -1033,7 +1033,7 @@ export function activate(ctx: vscode.ExtensionContext) {
 
           // Original AI Feedback button
           const item = new vscode.NotebookCellStatusBarItem(
-            '$(zap) 🧠 AI Feedback',
+            '$(zap) AI Feedback',
             vscode.NotebookCellStatusBarAlignment.Right
           );
           item.priority = 100;
@@ -1228,7 +1228,7 @@ export function activate(ctx: vscode.ExtensionContext) {
             const isMac = process.platform === 'darwin';
             const shortcut = isMac ? 'Cmd+Shift+P' : 'Ctrl+Shift+P';
 
-            const content = `# **🆘 Error Helper**
+            const content = `# **Error Helper**
 
 ${feedback}
 
@@ -1671,7 +1671,7 @@ ${feedback}
           vscode.window.showInformationMessage('No available templates');
           return;
         }
-        // 生成下拉选项
+        // Generate dropdown options
         const items = templates.map(t => ({
           label: t.id,
           description: t.filename
@@ -1680,7 +1680,7 @@ ${feedback}
           placeHolder: 'Please select a template'
         });
         if (pick) {
-          // 写入配置
+          // Write configuration
           await vscode.workspace.getConfiguration('CellMate')
             .update('templateId', pick.label, vscode.ConfigurationTarget.Global);
           vscode.window.showInformationMessage(`Selected template: ${pick.label}`);
@@ -1719,7 +1719,7 @@ ${feedback}
             return;
           }
 
-          // 生成下拉选项
+          // Generate dropdown options
           const items = templates.map(t => ({
             label: t.id,
             description: t.filename
@@ -1981,7 +1981,7 @@ function getExplanationCtx(cellUri: string) {
       try {
         followupPromptTpl = await getPromptContent('followup');
       } catch (e:any) {
-        vscode.window.showErrorMessage('⚠️ Failed to load Followup prompt: ' + e.message);
+        vscode.window.showErrorMessage('Failed to load Followup prompt: ' + e.message);
       }
       const panel = vscode.window.createWebviewPanel(
         'followUpChat',
@@ -2044,7 +2044,7 @@ function getExplanationCtx(cellUri: string) {
             border: 1px solid #e5e7eb;
           }
 
-          /* 防溢出优化 */
+          /* Overflow optimization */
           .message code {
             white-space: pre-wrap;
             word-break: break-word;
@@ -2066,7 +2066,7 @@ function getExplanationCtx(cellUri: string) {
           .message th, .message td {
             word-break: break-word;
           }
-          /* 紧凑 Markdown 样式 */
+          /* Compact Markdown style */
           .message.assistant p {
             margin: 0.2em 0;
             line-height: 1.4;
@@ -2276,7 +2276,7 @@ function getExplanationCtx(cellUri: string) {
           const question = String(msg.question ?? '');
           const wholeFeedback = ctxData?.wholeFeedback ?? '';
 
-          // 直接拼接 prompt
+          // Concatenate prompt directly
           const fullPrompt = followupPromptTpl
             .replace('{{explanationOutput}}', explanationOutput)
             .replace('{{wholeFeedback}}', wholeFeedback)
