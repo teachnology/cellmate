@@ -5,7 +5,7 @@ export function applyTemplate(template: string, variables: Record<string, string
   return template.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
     const value = variables[key];
     if (value === undefined) {
-      console.warn(`⚠️ Missing value for variable: {{${key}}}`);
+      console.warn(`Missing value for variable: {{${key}}}`);
       return `{{${key}}}`; // Keep original format
     }
     return value;

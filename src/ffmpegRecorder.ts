@@ -58,7 +58,7 @@ export function startFFmpegRecording() {
         vscode.window.showErrorMessage(`FFmpeg failed: ${err.message}`);
     });
 
-    vscode.window.showInformationMessage('🎙️ Recording started...');
+    vscode.window.showInformationMessage('Recording started...');
 }
 
 // Stop recording and return audio file path

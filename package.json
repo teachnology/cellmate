@@ -197,7 +197,7 @@
       },
       {
         "command": "CellMate.toggleRecording",
-        "title": "🎙️ Toggle Speech-to-Text Recording"
+        "title": "Toggle Speech-to-Text Recording"
       },
       {
         "command": "CellMate.askFollowUpFromButton",
@@ -235,5 +235,8 @@
   },
   "extensionDependencies": [
     "ms-python.python"
-  ]
+  ],
+  "allowScripts": {
+    "@ffmpeg-installer/darwin-arm64@4.1.5": true
+  }
 }
