@@ -15,7 +15,7 @@ import {
 import {
   getNotebookPythonPath,
   checkPytestInstalled,
-  ensurePythonDeps,
+  prepareVenv,
   runLocalTest,
   generateSuggestions,
   generateConciseTestSummary
@@ -1401,13 +1401,10 @@ ${feedback}
             return;
           }
 
-          const requiredPkgs = ['pytest', 'pytest-json-report'];
-          for (const pkg of requiredPkgs) {
-            const hasPkg = await checkPytestInstalled(pythonPath, pkg);
-            if (!hasPkg) {
-              const ok = await ensurePythonDeps(pythonPath, [pkg]);
-              if (!ok) return;
-            }
+          // Prepare the virtual environment with system-site-packages
+          const venvPython = await prepareVenv(pythonPath);
+          if (!venvPython) {
+            return;
           }
 
           // Prepare resource directories (e.g., data/) so user code can read files
@@ -1419,7 +1416,7 @@ ${feedback}
           } catch {}
 
           // Run tests locally (with internal timeout guard and resource copy)
-          const testResult = await runLocalTest(code, test, pythonPath, 15000, resourceDirs);
+          const testResult = await runLocalTest(code, test, venvPython, 15000, resourceDirs);
           // log('=== test result Debug ===');
           log(testResult)
 

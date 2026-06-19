@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
 import * as tmp from 'tmp';
+import * as os from 'os';
 
 /**
  * Get the Python path from the active notebook's kernel
@@ -51,6 +52,53 @@ export function ensurePythonDeps(pythonPath: string, pkgs: string[]): Promise<bo
         resolve(true);
       }
     });
+  });
+}
+
+/**
+ * Create or get a virtual environment with system-site-packages and install dependencies
+ */
+export async function prepareVenv(basePython: string): Promise<string | null> {
+  const isWindows = process.platform === 'win32';
+  const venvDir = path.join(os.tmpdir(), 'cellmate_venv');
+  const venvPython = isWindows ? path.join(venvDir, 'Scripts', 'python.exe') : path.join(venvDir, 'bin', 'python');
+  const venvPip = isWindows ? path.join(venvDir, 'Scripts', 'pip.exe') : path.join(venvDir, 'bin', 'pip');
+
+  return new Promise((resolve) => {
+    // Check if venv exists and pytest is installed
+    if (fs.existsSync(venvPython)) {
+      cp.execFile(venvPython, ['-m', 'pytest', '--version'], (err) => {
+        if (!err) {
+          resolve(venvPython);
+        } else {
+          // Exists but pytest is broken/missing, reinstall
+          installDeps();
+        }
+      });
+    } else {
+      // Create venv
+      vscode.window.showInformationMessage('Cellmate: Creating test virtual environment... (first time only)');
+      cp.execFile(basePython, ['-m', 'venv', '--system-site-packages', venvDir], (err, stdout, stderr) => {
+        if (err) {
+          vscode.window.showErrorMessage(`Failed to create virtual environment: ${stderr || err.message}`);
+          resolve(null);
+        } else {
+          installDeps();
+        }
+      });
+    }
+
+    function installDeps() {
+      const pkgs = ['pytest', 'pytest-json-report'];
+      cp.execFile(venvPip, ['install', ...pkgs], (err, stdout, stderr) => {
+        if (err) {
+          vscode.window.showErrorMessage(`Cellmate: install dependencies failed in venv: ${stderr || err.message}`);
+          resolve(null);
+        } else {
+          resolve(venvPython);
+        }
+      });
+    }
   });
 }
 
