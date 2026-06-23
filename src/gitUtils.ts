@@ -92,4 +92,11 @@ export async function listLocalTemplates(): Promise<any[]> {
       id: file.replace('.txt', ''), 
       filename: file 
     }));
-} 
+}
+
+/**
+ * Check if the synced repository contains a knowledge/ directory for RAG
+ */
+export function hasKnowledgeBase(): boolean {
+  return fs.existsSync(path.join(LOCAL_REPO_PATH, 'knowledge'));
+}
