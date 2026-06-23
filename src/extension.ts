@@ -10,8 +10,10 @@ import {
   getTestFiles,
   listLocalExercises,
   listLocalTemplates,
+  hasKnowledgeBase,
   LOCAL_REPO_PATH,
 } from './gitUtils';
+import { buildRagIndex, loadRagIndex, retrieveContext } from './ragUtils';
 import {
   getNotebookPythonPath,
   checkPytestInstalled,
@@ -1366,6 +1368,12 @@ ${feedback}
         // 1. Sync GitHub repository
         await syncGitRepo();
 
+        // Build RAG index if knowledge base exists and RAG is enabled
+        const useRAG = cfg.get<boolean>('useRAG', false);
+        if (useRAG && hasKnowledgeBase()) {
+          await buildRagIndex(LOCAL_REPO_PATH);
+        }
+
         // 2. Get prompt content
         const promptIdFromCell = extractPromptId(code);
         const promptId = promptIdFromCell || cfg.get<string>('templateId', '');
@@ -1517,6 +1525,21 @@ ${feedback}
           placeholderMap.set('hidden_tests', analysis);
         } else {
           placeholderMap.set('hidden_tests', '');
+        }
+
+        // RAG: retrieve relevant course materials if enabled
+        if (useRAG) {
+          const ragIndex = loadRagIndex();
+          if (ragIndex.length > 0) {
+            const ragQuery = code + '\n' + analysis;
+            const ragContext = retrieveContext(ragQuery, ragIndex, 3);
+            placeholderMap.set('rag_context', ragContext);
+            log('RAG context retrieved, chunks:', ragContext ? 'yes' : 'none');
+          } else {
+            placeholderMap.set('rag_context', '');
+          }
+        } else {
+          placeholderMap.set('rag_context', '');
         }
 
         // Fill only declared placeholders, keep others unchanged
