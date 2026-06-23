@@ -66,6 +66,11 @@
             "default": true,
             "description": "Whether to use hidden tests to enhance the prompt with test analysis"
           },
+          "CellMate.useRAG": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable RAG to ground AI feedback in course materials from the knowledge/ directory in the promptfolio repository."
+          },
           "CellMate.errorHelperOutput": {
             "type": "string",
             "default": "markdown",
