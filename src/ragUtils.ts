@@ -117,3 +117,46 @@ function chunkMarkdown(content: string, source: string, maxWords: number = 500):
   return chunks;
 }
 
+/**
+ * Chunk a Python file by top-level def/class blocks
+ */
+function chunkPython(content: string, source: string): RagChunk[] {
+  const chunks: RagChunk[] = [];
+  // Split on top-level function/class definitions (lines starting at column 0)
+  const blocks = content.split(/^(?=(?:def |class ))/m);
+
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+
+    // Extract function/class name as title
+    const nameMatch = trimmed.match(/^(?:def|class)\s+(\w+)/);
+    const title = nameMatch ? nameMatch[1] : path.basename(source);
+
+    const tokens = [...new Set(tokenize(trimmed))];
+    chunks.push({
+      id: hashId(source, title),
+      source,
+      title,
+      content: trimmed,
+      tokens,
+    });
+  }
+
+  // If no def/class found, treat entire file as one chunk
+  if (chunks.length === 0 && content.trim()) {
+    const title = path.basename(source);
+    const tokens = [...new Set(tokenize(content))];
+    chunks.push({
+      id: hashId(source, title),
+      source,
+      title,
+      content: content.trim(),
+      tokens,
+    });
+  }
+
+  return chunks;
+}
+
+
