@@ -159,4 +159,23 @@ function chunkPython(content: string, source: string): RagChunk[] {
   return chunks;
 }
 
+/**
+ * Recursively collect all files from a directory with given extensions
+ */
+function collectFiles(dir: string, extensions: string[]): string[] {
+  const results: string[] = [];
+  if (!fs.existsSync(dir)) return results;
+
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...collectFiles(fullPath, extensions));
+    } else if (extensions.some(ext => entry.name.endsWith(ext))) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
+
 
