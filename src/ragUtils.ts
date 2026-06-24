@@ -50,3 +50,70 @@ function tokenize(text: string): string[] {
 function hashId(source: string, title: string): string {
   return crypto.createHash('md5').update(source + '::' + title).digest('hex').slice(0, 12);
 }
+
+/**
+ * Chunk a Markdown file by ## headings.
+ * If a section exceeds maxWords, split further on double newlines.
+ */
+function chunkMarkdown(content: string, source: string, maxWords: number = 500): RagChunk[] {
+  const chunks: RagChunk[] = [];
+  // Split on ## headings, keeping the heading with its section
+  const sections = content.split(/^(?=## )/m);
+
+  for (const section of sections) {
+    const trimmed = section.trim();
+    if (!trimmed) continue;
+
+    // Extract title from heading line, or use filename
+    const headingMatch = trimmed.match(/^##\s+(.+)$/m);
+    const title = headingMatch ? headingMatch[1].trim() : path.basename(source);
+
+    const words = trimmed.split(/\s+/);
+    if (words.length <= maxWords) {
+      const tokens = [...new Set(tokenize(trimmed))];
+      chunks.push({
+        id: hashId(source, title),
+        source,
+        title,
+        content: trimmed,
+        tokens,
+      });
+    } else {
+      // Split large sections on double newlines
+      const paragraphs = trimmed.split(/\n\n+/);
+      let buffer = '';
+      let partIdx = 0;
+      for (const para of paragraphs) {
+        if (buffer && (buffer + '\n\n' + para).split(/\s+/).length > maxWords) {
+          const subTitle = `${title} (part ${partIdx + 1})`;
+          const tokens = [...new Set(tokenize(buffer))];
+          chunks.push({
+            id: hashId(source, subTitle),
+            source,
+            title: subTitle,
+            content: buffer.trim(),
+            tokens,
+          });
+          buffer = para;
+          partIdx++;
+        } else {
+          buffer = buffer ? buffer + '\n\n' + para : para;
+        }
+      }
+      if (buffer.trim()) {
+        const subTitle = partIdx > 0 ? `${title} (part ${partIdx + 1})` : title;
+        const tokens = [...new Set(tokenize(buffer))];
+        chunks.push({
+          id: hashId(source, subTitle),
+          source,
+          title: subTitle,
+          content: buffer.trim(),
+          tokens,
+        });
+      }
+    }
+  }
+
+  return chunks;
+}
+
