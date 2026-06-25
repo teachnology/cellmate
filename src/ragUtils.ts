@@ -178,4 +178,102 @@ function collectFiles(dir: string, extensions: string[]): string[] {
   return results;
 }
 
+/**
+ * Build the RAG index from the knowledge/ directory in the synced repo.
+ * Chunks .md files by heading and .py files by function/class definitions.
+ * Caches the index as JSON in the temp directory.
+ */
+export async function buildRagIndex(repoPath: string): Promise<RagChunk[]> {
+  const knowledgeDir = path.join(repoPath, 'knowledge');
+  if (!fs.existsSync(knowledgeDir)) return [];
 
+  const files = collectFiles(knowledgeDir, ['.md', '.py', '.txt']);
+  const allChunks: RagChunk[] = [];
+
+  for (const filePath of files) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const relativePath = path.relative(knowledgeDir, filePath);
+
+    if (filePath.endsWith('.py')) {
+      allChunks.push(...chunkPython(content, relativePath));
+    } else {
+      // .md and .txt files use markdown chunking
+      allChunks.push(...chunkMarkdown(content, relativePath));
+    }
+  }
+
+  // Cache the index to disk
+  if (!fs.existsSync(RAG_CACHE_DIR)) {
+    fs.mkdirSync(RAG_CACHE_DIR, { recursive: true });
+  }
+  fs.writeFileSync(RAG_INDEX_FILE, JSON.stringify(allChunks, null, 2), 'utf8');
+
+  return allChunks;
+}
+
+/**
+ * Load the cached RAG index from disk.
+ * Returns an empty array if the cache does not exist.
+ */
+export function loadRagIndex(): RagChunk[] {
+  if (!fs.existsSync(RAG_INDEX_FILE)) return [];
+  try {
+    const data = fs.readFileSync(RAG_INDEX_FILE, 'utf8');
+    return JSON.parse(data) as RagChunk[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Retrieve the top-K most relevant chunks for a given query using BM25-lite scoring.
+ *
+ * Scoring formula per chunk:
+ *   score = sum of IDF(term) for each query term found in the chunk
+ *   IDF(term) = log(N / (1 + df))
+ *   where N = total chunks, df = number of chunks containing the term
+ *
+ * Returns the concatenated content of the top-K chunks with source attribution.
+ */
+export function retrieveContext(query: string, index: RagChunk[], topK: number = 3): string {
+  if (index.length === 0) return '';
+
+  const queryTokens = [...new Set(tokenize(query))];
+  if (queryTokens.length === 0) return '';
+
+  const N = index.length;
+
+  // Pre-compute document frequency for each query token
+  const df = new Map<string, number>();
+  for (const token of queryTokens) {
+    let count = 0;
+    for (const chunk of index) {
+      if (chunk.tokens.includes(token)) count++;
+    }
+    df.set(token, count);
+  }
+
+  // Score each chunk
+  const scored = index.map(chunk => {
+    let score = 0;
+    const chunkTokenSet = new Set(chunk.tokens);
+    for (const token of queryTokens) {
+      if (chunkTokenSet.has(token)) {
+        const termDf = df.get(token) || 0;
+        score += Math.log(N / (1 + termDf));
+      }
+    }
+    return { chunk, score };
+  });
+
+  // Sort by score descending, take top-K
+  scored.sort((a, b) => b.score - a.score);
+  const topChunks = scored.slice(0, topK).filter(s => s.score > 0);
+
+  if (topChunks.length === 0) return '';
+
+  // Format the retrieved context with source attribution
+  return topChunks
+    .map(({ chunk }) => `### ${chunk.title}\n*(Source: ${chunk.source})*\n\n${chunk.content}`)
+    .join('\n\n---\n\n');
+}
