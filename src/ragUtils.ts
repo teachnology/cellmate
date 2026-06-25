@@ -211,3 +211,17 @@ export async function buildRagIndex(repoPath: string): Promise<RagChunk[]> {
   return allChunks;
 }
 
+/**
+ * Load the cached RAG index from disk.
+ * Returns an empty array if the cache does not exist.
+ */
+export function loadRagIndex(): RagChunk[] {
+  if (!fs.existsSync(RAG_INDEX_FILE)) return [];
+  try {
+    const data = fs.readFileSync(RAG_INDEX_FILE, 'utf8');
+    return JSON.parse(data) as RagChunk[];
+  } catch {
+    return [];
+  }
+}
+
