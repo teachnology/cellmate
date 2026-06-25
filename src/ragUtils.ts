@@ -178,4 +178,36 @@ function collectFiles(dir: string, extensions: string[]): string[] {
   return results;
 }
 
+/**
+ * Build the RAG index from the knowledge/ directory in the synced repo.
+ * Chunks .md files by heading and .py files by function/class definitions.
+ * Caches the index as JSON in the temp directory.
+ */
+export async function buildRagIndex(repoPath: string): Promise<RagChunk[]> {
+  const knowledgeDir = path.join(repoPath, 'knowledge');
+  if (!fs.existsSync(knowledgeDir)) return [];
+
+  const files = collectFiles(knowledgeDir, ['.md', '.py', '.txt']);
+  const allChunks: RagChunk[] = [];
+
+  for (const filePath of files) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const relativePath = path.relative(knowledgeDir, filePath);
+
+    if (filePath.endsWith('.py')) {
+      allChunks.push(...chunkPython(content, relativePath));
+    } else {
+      // .md and .txt files use markdown chunking
+      allChunks.push(...chunkMarkdown(content, relativePath));
+    }
+  }
+
+  // Cache the index to disk
+  if (!fs.existsSync(RAG_CACHE_DIR)) {
+    fs.mkdirSync(RAG_CACHE_DIR, { recursive: true });
+  }
+  fs.writeFileSync(RAG_INDEX_FILE, JSON.stringify(allChunks, null, 2), 'utf8');
+
+  return allChunks;
+}
 
