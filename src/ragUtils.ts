@@ -160,6 +160,60 @@ function chunkPython(content: string, source: string): RagChunk[] {
 }
 
 /**
+ * Parse a Jupyter Notebook (.ipynb) file and chunk its cells.
+ * Markdown cells are chunked using the markdown chunker.
+ * Code cells are chunked using the Python chunker.
+ */
+function chunkNotebook(content: string, source: string): RagChunk[] {
+  const chunks: RagChunk[] = [];
+
+  let notebook: any;
+  try {
+    notebook = JSON.parse(content);
+  } catch {
+    // If JSON parsing fails, skip this file
+    return chunks;
+  }
+
+  if (!notebook.cells || !Array.isArray(notebook.cells)) return chunks;
+
+  // Accumulate consecutive markdown cells into sections for better chunking
+  let mdBuffer = '';
+  let mdStartIdx = -1;
+
+  function flushMarkdown() {
+    if (mdBuffer.trim()) {
+      const sectionSource = `${source} [cells ${mdStartIdx}+]`;
+      chunks.push(...chunkMarkdown(mdBuffer, sectionSource));
+    }
+    mdBuffer = '';
+    mdStartIdx = -1;
+  }
+
+  for (let i = 0; i < notebook.cells.length; i++) {
+    const cell = notebook.cells[i];
+    // Cell source can be a string or an array of strings
+    const cellSource = Array.isArray(cell.source) ? cell.source.join('') : (cell.source || '');
+    if (!cellSource.trim()) continue;
+
+    if (cell.cell_type === 'markdown') {
+      if (mdStartIdx < 0) mdStartIdx = i;
+      mdBuffer += cellSource + '\n\n';
+    } else if (cell.cell_type === 'code') {
+      // Flush any accumulated markdown before processing code
+      flushMarkdown();
+      const codeSource = `${source} [cell ${i}]`;
+      chunks.push(...chunkPython(cellSource, codeSource));
+    }
+  }
+
+  // Flush remaining markdown
+  flushMarkdown();
+
+  return chunks;
+}
+
+/**
  * Recursively collect all files from a directory with given extensions
  */
 function collectFiles(dir: string, extensions: string[]): string[] {
@@ -187,14 +241,16 @@ export async function buildRagIndex(repoPath: string): Promise<RagChunk[]> {
   const knowledgeDir = path.join(repoPath, 'knowledge');
   if (!fs.existsSync(knowledgeDir)) return [];
 
-  const files = collectFiles(knowledgeDir, ['.md', '.py', '.txt']);
+  const files = collectFiles(knowledgeDir, ['.md', '.py', '.txt', '.ipynb']);
   const allChunks: RagChunk[] = [];
 
   for (const filePath of files) {
     const content = fs.readFileSync(filePath, 'utf8');
     const relativePath = path.relative(knowledgeDir, filePath);
 
-    if (filePath.endsWith('.py')) {
+    if (filePath.endsWith('.ipynb')) {
+      allChunks.push(...chunkNotebook(content, relativePath));
+    } else if (filePath.endsWith('.py')) {
       allChunks.push(...chunkPython(content, relativePath));
     } else {
       // .md and .txt files use markdown chunking
