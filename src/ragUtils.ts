@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import axios from 'axios';
 
 const RAG_CACHE_DIR = path.join(os.tmpdir(), 'cellmate_rag');
 const RAG_INDEX_FILE = path.join(RAG_CACHE_DIR, 'index.json');
@@ -32,6 +33,7 @@ export interface RagChunk {
   title: string;       // heading or filename
   content: string;     // chunk text
   tokens: string[];    // lowercased, deduplicated keyword tokens
+  embedding?: number[];// dense vector from embedding API (semantic mode)
 }
 
 /**
@@ -266,6 +268,25 @@ export async function buildRagIndex(repoPath: string): Promise<RagChunk[]> {
 
   return allChunks;
 }
+
+// ======================== Semantic RAG (Embedding) ========================
+
+/**
+ * Compute cosine similarity between two vectors
+ */
+export function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+
 
 /**
  * Load the cached RAG index from disk.
