@@ -304,6 +304,46 @@ export function deriveEmbeddingUrl(apiUrl: string): string {
   return apiUrl.replace(/\/$/, '') + '/v1/embeddings';
 }
 
+/**
+ * Batch-embed an array of texts via the embedding API.
+ * Supports both OpenAI response format and Ollama response format.
+ * Returns an array of embedding vectors (one per input text).
+ */
+export async function embedTexts(
+  texts: string[],
+  embeddingUrl: string,
+  apiKey: string,
+  model: string
+): Promise<number[][]> {
+  const isOllama = embeddingUrl.includes('/api/embed');
+
+  if (isOllama) {
+    // Ollama /api/embed accepts { model, input } → { embeddings: [[...], ...] }
+    const resp = await axios.post(embeddingUrl, {
+      model,
+      input: texts,
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 120000,
+    });
+    return resp.data.embeddings as number[][];
+  } else {
+    // OpenAI-compatible /v1/embeddings accepts { model, input } → { data: [{ embedding }] }
+    const resp = await axios.post(embeddingUrl, {
+      model,
+      input: texts,
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      timeout: 120000,
+    });
+    return resp.data.data.map((d: any) => d.embedding) as number[][];
+  }
+}
+
+
 
 /**
  * Load the cached RAG index from disk.
