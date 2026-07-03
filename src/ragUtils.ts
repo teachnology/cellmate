@@ -286,6 +286,23 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return denom === 0 ? 0 : dot / denom;
 }
 
+/**
+ * Derive the embedding API URL from the user's existing LLM apiUrl.
+ * - OpenAI-compatible: /v1/chat/completions → /v1/embeddings
+ * - Ollama: /api/generate → /api/embed
+ */
+export function deriveEmbeddingUrl(apiUrl: string): string {
+  if (apiUrl.includes('/chat/completions')) {
+    // OpenAI-compatible: replace /chat/completions with /embeddings
+    return apiUrl.replace(/\/chat\/completions.*/, '/embeddings');
+  }
+  if (apiUrl.includes('/api/generate')) {
+    // Ollama: replace /api/generate with /api/embed
+    return apiUrl.replace(/\/api\/generate.*/, '/api/embed');
+  }
+  // Fallback: assume OpenAI-compatible, append /v1/embeddings
+  return apiUrl.replace(/\/$/, '') + '/v1/embeddings';
+}
 
 
 /**
