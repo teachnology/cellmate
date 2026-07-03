@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import axios from 'axios';
 
 const RAG_CACHE_DIR = path.join(os.tmpdir(), 'cellmate_rag');
 const RAG_INDEX_FILE = path.join(RAG_CACHE_DIR, 'index.json');
@@ -32,6 +33,7 @@ export interface RagChunk {
   title: string;       // heading or filename
   content: string;     // chunk text
   tokens: string[];    // lowercased, deduplicated keyword tokens
+  embedding?: number[];// dense vector from embedding API (semantic mode)
 }
 
 /**
@@ -266,6 +268,82 @@ export async function buildRagIndex(repoPath: string): Promise<RagChunk[]> {
 
   return allChunks;
 }
+
+// ======================== Semantic RAG (Embedding) ========================
+
+/**
+ * Compute cosine similarity between two vectors
+ */
+export function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/**
+ * Derive the embedding API URL from the user's existing LLM apiUrl.
+ * - OpenAI-compatible: /v1/chat/completions → /v1/embeddings
+ * - Ollama: /api/generate → /api/embed
+ */
+export function deriveEmbeddingUrl(apiUrl: string): string {
+  if (apiUrl.includes('/chat/completions')) {
+    // OpenAI-compatible: replace /chat/completions with /embeddings
+    return apiUrl.replace(/\/chat\/completions.*/, '/embeddings');
+  }
+  if (apiUrl.includes('/api/generate')) {
+    // Ollama: replace /api/generate with /api/embed
+    return apiUrl.replace(/\/api\/generate.*/, '/api/embed');
+  }
+  // Fallback: assume OpenAI-compatible, append /v1/embeddings
+  return apiUrl.replace(/\/$/, '') + '/v1/embeddings';
+}
+
+/**
+ * Batch-embed an array of texts via the embedding API.
+ * Supports both OpenAI response format and Ollama response format.
+ * Returns an array of embedding vectors (one per input text).
+ */
+export async function embedTexts(
+  texts: string[],
+  embeddingUrl: string,
+  apiKey: string,
+  model: string
+): Promise<number[][]> {
+  const isOllama = embeddingUrl.includes('/api/embed');
+
+  if (isOllama) {
+    // Ollama /api/embed accepts { model, input } → { embeddings: [[...], ...] }
+    const resp = await axios.post(embeddingUrl, {
+      model,
+      input: texts,
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 120000,
+    });
+    return resp.data.embeddings as number[][];
+  } else {
+    // OpenAI-compatible /v1/embeddings accepts { model, input } → { data: [{ embedding }] }
+    const resp = await axios.post(embeddingUrl, {
+      model,
+      input: texts,
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      timeout: 120000,
+    });
+    return resp.data.data.map((d: any) => d.embedding) as number[][];
+  }
+}
+
+
 
 /**
  * Load the cached RAG index from disk.
