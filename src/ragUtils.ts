@@ -343,7 +343,51 @@ export async function embedTexts(
   }
 }
 
+/**
+ * Build a semantic RAG index: chunk files, embed all chunks via API, cache with vectors.
+ * Falls back to keyword-only index if embedding fails.
+ */
+export async function buildSemanticIndex(
+  repoPath: string,
+  apiUrl: string,
+  apiKey: string,
+  model: string
+): Promise<RagChunk[]> {
+  // First build the keyword index (chunking)
+  const chunks = await buildRagIndex(repoPath);
+  if (chunks.length === 0) return chunks;
 
+  // Check if embeddings are already cached and up-to-date
+  if (chunks[0].embedding && chunks[0].embedding.length > 0) {
+    return chunks;
+  }
+
+  const embeddingUrl = deriveEmbeddingUrl(apiUrl);
+
+  try {
+    // Batch embed in groups of 20 to avoid request size limits
+    const batchSize = 20;
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batch = chunks.slice(i, i + batchSize);
+      const texts = batch.map(c => c.content.substring(0, 2000)); // Truncate long chunks
+      const embeddings = await embedTexts(texts, embeddingUrl, apiKey, model);
+      for (let j = 0; j < batch.length; j++) {
+        batch[j].embedding = embeddings[j];
+      }
+    }
+
+    // Re-cache the index with embeddings
+    if (!fs.existsSync(RAG_CACHE_DIR)) {
+      fs.mkdirSync(RAG_CACHE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(RAG_INDEX_FILE, JSON.stringify(chunks, null, 2), 'utf8');
+  } catch (err: any) {
+    // If embedding fails, log warning and continue with keyword-only index
+    console.warn('Semantic RAG: embedding failed, falling back to keyword mode:', err.message);
+  }
+
+  return chunks;
+}
 
 /**
  * Load the cached RAG index from disk.
