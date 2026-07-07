@@ -404,45 +404,62 @@ export function loadRagIndex(): RagChunk[] {
 }
 
 /**
- * Retrieve the top-K most relevant chunks for a given query using BM25-lite scoring.
+ * Retrieve the top-K most relevant chunks for a given query.
  *
- * Scoring formula per chunk:
- *   score = sum of IDF(term) for each query term found in the chunk
- *   IDF(term) = log(N / (1 + df))
- *   where N = total chunks, df = number of chunks containing the term
+ * If queryEmbedding is provided and the index contains embeddings,
+ * uses cosine similarity (semantic mode). Otherwise falls back to
+ * BM25-lite keyword scoring.
  *
  * Returns the concatenated content of the top-K chunks with source attribution.
  */
-export function retrieveContext(query: string, index: RagChunk[], topK: number = 3): string {
+export function retrieveContext(
+  query: string,
+  index: RagChunk[],
+  topK: number = 3,
+  queryEmbedding?: number[]
+): string {
   if (index.length === 0) return '';
 
-  const queryTokens = [...new Set(tokenize(query))];
-  if (queryTokens.length === 0) return '';
+  let scored: { chunk: RagChunk; score: number }[];
 
-  const N = index.length;
+  // Semantic mode: cosine similarity
+  if (queryEmbedding && queryEmbedding.length > 0 && index[0]?.embedding && index[0].embedding.length > 0) {
+    scored = index
+      .filter(c => c.embedding && c.embedding.length > 0)
+      .map(chunk => ({
+        chunk,
+        score: cosineSimilarity(queryEmbedding, chunk.embedding!),
+      }));
+  } else {
+    // BM25-lite keyword mode (existing logic)
+    const queryTokens = [...new Set(tokenize(query))];
+    if (queryTokens.length === 0) return '';
 
-  // Pre-compute document frequency for each query token
-  const df = new Map<string, number>();
-  for (const token of queryTokens) {
-    let count = 0;
-    for (const chunk of index) {
-      if (chunk.tokens.includes(token)) count++;
-    }
-    df.set(token, count);
-  }
+    const N = index.length;
 
-  // Score each chunk
-  const scored = index.map(chunk => {
-    let score = 0;
-    const chunkTokenSet = new Set(chunk.tokens);
+    // Pre-compute document frequency for each query token
+    const df = new Map<string, number>();
     for (const token of queryTokens) {
-      if (chunkTokenSet.has(token)) {
-        const termDf = df.get(token) || 0;
-        score += Math.log(N / (1 + termDf));
+      let count = 0;
+      for (const chunk of index) {
+        if (chunk.tokens.includes(token)) count++;
       }
+      df.set(token, count);
     }
-    return { chunk, score };
-  });
+
+    // Score each chunk
+    scored = index.map(chunk => {
+      let score = 0;
+      const chunkTokenSet = new Set(chunk.tokens);
+      for (const token of queryTokens) {
+        if (chunkTokenSet.has(token)) {
+          const termDf = df.get(token) || 0;
+          score += Math.log(N / (1 + termDf));
+        }
+      }
+      return { chunk, score };
+    });
+  }
 
   // Sort by score descending, take top-K
   scored.sort((a, b) => b.score - a.score);
