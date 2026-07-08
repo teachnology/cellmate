@@ -71,6 +71,24 @@
             "default": false,
             "description": "Enable RAG to ground AI feedback in course materials from the knowledge/ directory in the promptfolio repository."
           },
+          "CellMate.ragMode": {
+            "type": "string",
+            "default": "keyword",
+            "enum": [
+              "keyword",
+              "semantic"
+            ],
+            "enumDescriptions": [
+              "BM25 keyword matching (no extra API calls, fast)",
+              "Embedding-based semantic search (uses LLM API for embeddings, more accurate)"
+            ],
+            "description": "RAG retrieval mode: keyword (BM25) or semantic (embedding-based)"
+          },
+          "CellMate.embeddingModel": {
+            "type": "string",
+            "default": "text-embedding-3-small",
+            "description": "Embedding model name for semantic RAG mode (e.g., text-embedding-3-small for OpenAI, nomic-embed-text for Ollama)"
+          },
           "CellMate.errorHelperOutput": {
             "type": "string",
             "default": "markdown",

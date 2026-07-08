@@ -13,7 +13,7 @@ import {
   hasKnowledgeBase,
   LOCAL_REPO_PATH,
 } from './gitUtils';
-import { buildRagIndex, loadRagIndex, retrieveContext } from './ragUtils';
+import { buildRagIndex, buildSemanticIndex, loadRagIndex, retrieveContext, embedTexts, deriveEmbeddingUrl } from './ragUtils';
 import {
   getNotebookPythonPath,
   checkPytestInstalled,
@@ -1370,8 +1370,14 @@ ${feedback}
 
         // Build RAG index if knowledge base exists and RAG is enabled
         const useRAG = cfg.get<boolean>('useRAG', false);
+        const ragMode = cfg.get<string>('ragMode', 'keyword');
         if (useRAG && hasKnowledgeBase()) {
-          await buildRagIndex(LOCAL_REPO_PATH);
+          if (ragMode === 'semantic') {
+            const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+            await buildSemanticIndex(LOCAL_REPO_PATH, apiUrl, apiKey, embModel);
+          } else {
+            await buildRagIndex(LOCAL_REPO_PATH);
+          }
         }
 
         // 2. Get prompt content
@@ -1532,9 +1538,28 @@ ${feedback}
           const ragIndex = loadRagIndex();
           if (ragIndex.length > 0) {
             const ragQuery = code + '\n' + analysis;
-            const ragContext = retrieveContext(ragQuery, ragIndex, 3);
+            let ragContext: string;
+
+            // Semantic mode: embed query and use cosine similarity
+            if (ragMode === 'semantic' && ragIndex[0]?.embedding) {
+              try {
+                const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+                const embUrl = deriveEmbeddingUrl(apiUrl);
+                const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
+                ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb);
+                log('RAG context retrieved via semantic mode');
+              } catch (err: any) {
+                // Fallback to keyword mode if embedding fails
+                log('Semantic RAG query failed, falling back to keyword mode:', err.message);
+                ragContext = retrieveContext(ragQuery, ragIndex, 3);
+              }
+            } else {
+              // Keyword mode (BM25)
+              ragContext = retrieveContext(ragQuery, ragIndex, 3);
+              log('RAG context retrieved via keyword mode');
+            }
+
             placeholderMap.set('rag_context', ragContext);
-            log('RAG context retrieved, chunks:', ragContext ? 'yes' : 'none');
           } else {
             placeholderMap.set('rag_context', '');
           }

@@ -343,7 +343,51 @@ export async function embedTexts(
   }
 }
 
+/**
+ * Build a semantic RAG index: chunk files, embed all chunks via API, cache with vectors.
+ * Falls back to keyword-only index if embedding fails.
+ */
+export async function buildSemanticIndex(
+  repoPath: string,
+  apiUrl: string,
+  apiKey: string,
+  model: string
+): Promise<RagChunk[]> {
+  // First build the keyword index (chunking)
+  const chunks = await buildRagIndex(repoPath);
+  if (chunks.length === 0) return chunks;
 
+  // Check if embeddings are already cached and up-to-date
+  if (chunks[0].embedding && chunks[0].embedding.length > 0) {
+    return chunks;
+  }
+
+  const embeddingUrl = deriveEmbeddingUrl(apiUrl);
+
+  try {
+    // Batch embed in groups of 20 to avoid request size limits
+    const batchSize = 20;
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batch = chunks.slice(i, i + batchSize);
+      const texts = batch.map(c => c.content.substring(0, 2000)); // Truncate long chunks
+      const embeddings = await embedTexts(texts, embeddingUrl, apiKey, model);
+      for (let j = 0; j < batch.length; j++) {
+        batch[j].embedding = embeddings[j];
+      }
+    }
+
+    // Re-cache the index with embeddings
+    if (!fs.existsSync(RAG_CACHE_DIR)) {
+      fs.mkdirSync(RAG_CACHE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(RAG_INDEX_FILE, JSON.stringify(chunks, null, 2), 'utf8');
+  } catch (err: any) {
+    // If embedding fails, log warning and continue with keyword-only index
+    console.warn('Semantic RAG: embedding failed, falling back to keyword mode:', err.message);
+  }
+
+  return chunks;
+}
 
 /**
  * Load the cached RAG index from disk.
@@ -360,45 +404,62 @@ export function loadRagIndex(): RagChunk[] {
 }
 
 /**
- * Retrieve the top-K most relevant chunks for a given query using BM25-lite scoring.
+ * Retrieve the top-K most relevant chunks for a given query.
  *
- * Scoring formula per chunk:
- *   score = sum of IDF(term) for each query term found in the chunk
- *   IDF(term) = log(N / (1 + df))
- *   where N = total chunks, df = number of chunks containing the term
+ * If queryEmbedding is provided and the index contains embeddings,
+ * uses cosine similarity (semantic mode). Otherwise falls back to
+ * BM25-lite keyword scoring.
  *
  * Returns the concatenated content of the top-K chunks with source attribution.
  */
-export function retrieveContext(query: string, index: RagChunk[], topK: number = 3): string {
+export function retrieveContext(
+  query: string,
+  index: RagChunk[],
+  topK: number = 3,
+  queryEmbedding?: number[]
+): string {
   if (index.length === 0) return '';
 
-  const queryTokens = [...new Set(tokenize(query))];
-  if (queryTokens.length === 0) return '';
+  let scored: { chunk: RagChunk; score: number }[];
 
-  const N = index.length;
+  // Semantic mode: cosine similarity
+  if (queryEmbedding && queryEmbedding.length > 0 && index[0]?.embedding && index[0].embedding.length > 0) {
+    scored = index
+      .filter(c => c.embedding && c.embedding.length > 0)
+      .map(chunk => ({
+        chunk,
+        score: cosineSimilarity(queryEmbedding, chunk.embedding!),
+      }));
+  } else {
+    // BM25-lite keyword mode (existing logic)
+    const queryTokens = [...new Set(tokenize(query))];
+    if (queryTokens.length === 0) return '';
 
-  // Pre-compute document frequency for each query token
-  const df = new Map<string, number>();
-  for (const token of queryTokens) {
-    let count = 0;
-    for (const chunk of index) {
-      if (chunk.tokens.includes(token)) count++;
-    }
-    df.set(token, count);
-  }
+    const N = index.length;
 
-  // Score each chunk
-  const scored = index.map(chunk => {
-    let score = 0;
-    const chunkTokenSet = new Set(chunk.tokens);
+    // Pre-compute document frequency for each query token
+    const df = new Map<string, number>();
     for (const token of queryTokens) {
-      if (chunkTokenSet.has(token)) {
-        const termDf = df.get(token) || 0;
-        score += Math.log(N / (1 + termDf));
+      let count = 0;
+      for (const chunk of index) {
+        if (chunk.tokens.includes(token)) count++;
       }
+      df.set(token, count);
     }
-    return { chunk, score };
-  });
+
+    // Score each chunk
+    scored = index.map(chunk => {
+      let score = 0;
+      const chunkTokenSet = new Set(chunk.tokens);
+      for (const token of queryTokens) {
+        if (chunkTokenSet.has(token)) {
+          const termDf = df.get(token) || 0;
+          score += Math.log(N / (1 + termDf));
+        }
+      }
+      return { chunk, score };
+    });
+  }
 
   // Sort by score descending, take top-K
   scored.sort((a, b) => b.score - a.score);
