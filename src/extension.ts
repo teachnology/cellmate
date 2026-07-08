@@ -13,7 +13,7 @@ import {
   hasKnowledgeBase,
   LOCAL_REPO_PATH,
 } from './gitUtils';
-import { buildRagIndex, loadRagIndex, retrieveContext } from './ragUtils';
+import { buildRagIndex, buildSemanticIndex, loadRagIndex, retrieveContext, embedTexts, deriveEmbeddingUrl } from './ragUtils';
 import {
   getNotebookPythonPath,
   checkPytestInstalled,
@@ -1370,8 +1370,14 @@ ${feedback}
 
         // Build RAG index if knowledge base exists and RAG is enabled
         const useRAG = cfg.get<boolean>('useRAG', false);
+        const ragMode = cfg.get<string>('ragMode', 'keyword');
         if (useRAG && hasKnowledgeBase()) {
+          if (ragMode === 'semantic') {
+            const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+            await buildSemanticIndex(LOCAL_REPO_PATH, apiUrl, apiKey, embModel);
+          } else {
           await buildRagIndex(LOCAL_REPO_PATH);
+        }
         }
 
         // 2. Get prompt content
