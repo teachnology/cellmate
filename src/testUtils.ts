@@ -90,7 +90,10 @@ export async function prepareVenv(basePython: string): Promise<string | null> {
 
     function installDeps() {
       const pkgs = ['pytest', 'pytest-json-report'];
-      cp.execFile(venvPip, ['install', ...pkgs], (err, stdout, stderr) => {
+      // Use "python -m pip" instead of calling the pip binary directly,
+      // because some environments (e.g., macOS system Python) create venvs
+      // without a standalone pip executable in bin/
+      cp.execFile(venvPython, ['-m', 'pip', 'install', ...pkgs], (err, stdout, stderr) => {
         if (err) {
           vscode.window.showErrorMessage(`Cellmate: install dependencies failed in venv: ${stderr || err.message}`);
           resolve(null);
