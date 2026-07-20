@@ -76,18 +76,25 @@
             "default": "keyword",
             "enum": [
               "keyword",
-              "semantic"
+              "semantic",
+              "chromadb"
             ],
             "enumDescriptions": [
               "BM25 keyword matching (no extra API calls, fast)",
-              "Embedding-based semantic search (uses LLM API for embeddings, more accurate)"
+              "Embedding-based semantic search (uses LLM API for embeddings, more accurate)",
+              "ChromaDB backend with local SentenceTransformers (requires running rag-server)"
             ],
-            "description": "RAG retrieval mode: keyword (BM25) or semantic (embedding-based)"
+            "description": "RAG retrieval mode: keyword (BM25), semantic (embedding via LLM API), or chromadb (separate backend)"
           },
           "CellMate.embeddingModel": {
             "type": "string",
             "default": "text-embedding-3-small",
             "description": "Embedding model name for semantic RAG mode (e.g., text-embedding-3-small for OpenAI, nomic-embed-text for Ollama)"
+          },
+          "CellMate.ragServerUrl": {
+            "type": "string",
+            "default": "http://localhost:8100",
+            "description": "URL of the ChromaDB RAG backend server (used when ragMode is 'chromadb')"
           },
           "CellMate.errorHelperOutput": {
             "type": "string",
