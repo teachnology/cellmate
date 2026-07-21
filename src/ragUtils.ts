@@ -472,3 +472,64 @@ export function retrieveContext(
     .map(({ chunk }) => `### ${chunk.title}\n*(Source: ${chunk.source})*\n\n${chunk.content}`)
     .join('\n\n---\n\n');
 }
+
+// ======================== ChromaDB Backend (Option 2) ========================
+/**
+ * Send chunked knowledge files to the ChromaDB backend for indexing.
+ * Reuses the existing file chunking logic (md, py, ipynb, txt).
+ */
+export async function indexToChromaDB(repoPath: string, serverUrl: string): Promise<number> {
+  const knowledgeDir = path.join(repoPath, 'knowledge');
+  if (!fs.existsSync(knowledgeDir)) return 0;
+  const files = collectFiles(knowledgeDir, ['.md', '.py', '.txt', '.ipynb']);
+  const allChunks: RagChunk[] = [];
+  for (const filePath of files) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const relativePath = path.relative(knowledgeDir, filePath);
+    if (filePath.endsWith('.ipynb')) {
+      allChunks.push(...chunkNotebook(content, relativePath));
+    } else if (filePath.endsWith('.py')) {
+      allChunks.push(...chunkPython(content, relativePath));
+    } else {
+      allChunks.push(...chunkMarkdown(content, relativePath));
+    }
+  }
+  if (allChunks.length === 0) return 0;
+  // Send chunks to the ChromaDB backend
+  const url = serverUrl.replace(/\/$/, '');
+  const payload = {
+    chunks: allChunks.map(c => ({
+      id: c.id,
+      source: c.source,
+      title: c.title,
+      content: c.content,
+    })),
+    reset: true,  // re-index from scratch each sync
+  };
+  const resp = await axios.post(`${url}/index`, payload, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 120000,
+  });
+  return resp.data.indexed || 0;
+}
+/**
+ * Query the ChromaDB backend for relevant course materials.
+ * Returns formatted context string matching the output format of retrieveContext().
+ */
+export async function queryChromaDB(query: string, serverUrl: string, topK: number = 3): Promise<string> {
+  const url = serverUrl.replace(/\/$/, '');
+  const resp = await axios.post(`${url}/query`, {
+    query: query.substring(0, 2000),  // truncate long queries
+    top_k: topK,
+  }, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 30000,
+  });
+  const results = resp.data.results || [];
+  if (results.length === 0) return '';
+  // Format in the same style as retrieveContext()
+  return results
+    .filter((r: any) => r.score > 0)
+    .map((r: any) => `### ${r.title}\n*(Source: ${r.source})*\n\n${r.content}`)
+    .join('\n\n---\n\n');
+}
