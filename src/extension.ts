@@ -13,7 +13,7 @@ import {
   hasKnowledgeBase,
   LOCAL_REPO_PATH,
 } from './gitUtils';
-import { buildRagIndex, buildSemanticIndex, loadRagIndex, retrieveContext, embedTexts, deriveEmbeddingUrl } from './ragUtils';
+import { buildRagIndex, buildSemanticIndex, loadRagIndex, retrieveContext, embedTexts, deriveEmbeddingUrl, indexToChromaDB, queryChromaDB } from './ragUtils';
 import {
   getNotebookPythonPath,
   checkPytestInstalled,
@@ -1372,7 +1372,16 @@ ${feedback}
         const useRAG = cfg.get<boolean>('useRAG', false);
         const ragMode = cfg.get<string>('ragMode', 'keyword');
         if (useRAG && hasKnowledgeBase()) {
-          if (ragMode === 'semantic') {
+          if (ragMode === 'chromadb') {
+            const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
+            try {
+              const indexed = await indexToChromaDB(LOCAL_REPO_PATH, ragServerUrl);
+              log(`ChromaDB: indexed ${indexed} chunks`);
+            } catch (err: any) {
+              log('ChromaDB indexing failed:', err.message);
+              vscode.window.showWarningMessage(`ChromaDB RAG server unreachable at ${ragServerUrl}. RAG context will be empty.`);
+            }
+          } else if (ragMode === 'semantic') {
             const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
             await buildSemanticIndex(LOCAL_REPO_PATH, apiUrl, apiKey, embModel);
           } else {
@@ -1535,34 +1544,42 @@ ${feedback}
 
         // RAG: retrieve relevant course materials if enabled
         if (useRAG) {
-          const ragIndex = loadRagIndex();
-          if (ragIndex.length > 0) {
-            const ragQuery = code + '\n' + analysis;
-            let ragContext: string;
+          const ragQuery = code + '\n' + analysis;
+          let ragContext = '';
 
-            // Semantic mode: embed query and use cosine similarity
-            if (ragMode === 'semantic' && ragIndex[0]?.embedding) {
-              try {
-                const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
-                const embUrl = deriveEmbeddingUrl(apiUrl);
-                const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
-                ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb);
-                log('RAG context retrieved via semantic mode');
-              } catch (err: any) {
-                // Fallback to keyword mode if embedding fails
-                log('Semantic RAG query failed, falling back to keyword mode:', err.message);
-                ragContext = retrieveContext(ragQuery, ragIndex, 3);
-              }
-            } else {
-              // Keyword mode (BM25)
-              ragContext = retrieveContext(ragQuery, ragIndex, 3);
-              log('RAG context retrieved via keyword mode');
+          if (ragMode === 'chromadb') {
+            // ChromaDB backend mode
+            try {
+              const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
+              ragContext = await queryChromaDB(ragQuery, ragServerUrl, 3);
+              log('RAG context retrieved via ChromaDB');
+            } catch (err: any) {
+              log('ChromaDB query failed:', err.message);
             }
-
-            placeholderMap.set('rag_context', ragContext);
           } else {
-            placeholderMap.set('rag_context', '');
+            // Local modes: keyword or semantic
+            const ragIndex = loadRagIndex();
+            if (ragIndex.length > 0) {
+              // Semantic mode: embed query and use cosine similarity
+              if (ragMode === 'semantic' && ragIndex[0]?.embedding) {
+                try {
+                  const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+                  const embUrl = deriveEmbeddingUrl(apiUrl);
+                  const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
+                  ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb);
+                  log('RAG context retrieved via semantic mode');
+                } catch (err: any) {
+                  log('Semantic RAG query failed, falling back to keyword mode:', err.message);
+                  ragContext = retrieveContext(ragQuery, ragIndex, 3);
+                }
+              } else {
+                // Keyword mode (BM25)            
+                ragContext = retrieveContext(ragQuery, ragIndex, 3);
+                log('RAG context retrieved via keyword mode');
+              }
+            }
           }
+          placeholderMap.set('rag_context', ragContext);
         } else {
           placeholderMap.set('rag_context', '');
         }
