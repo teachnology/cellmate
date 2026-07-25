@@ -10,27 +10,18 @@ Endpoints:
   POST /query   — Accept query text, return top-K relevant chunks
 """
 
-import os
-from typing import Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import chromadb
-from sentence_transformers import SentenceTransformer
+from config import chroma_client, collection as _collection, model, COLLECTION_NAME, EMBEDDING_MODEL
+
+# Mutable reference so /index reset can reassign
+collection = _collection
 
 # ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-CHROMA_PERSIST_DIR = os.path.join(os.path.dirname(__file__), "chroma_data")
-COLLECTION_NAME = "cellmate_knowledge"
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-
-# ---------------------------------------------------------------------------
-# Initialisation
+# App
 # ---------------------------------------------------------------------------
 app = FastAPI(title="CellMate RAG Server", version="1.0.0")
-
-# Allow requests from VS Code extension (localhost)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,22 +29,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load the embedding model once at startup
-print(f"Loading embedding model: {EMBEDDING_MODEL} ...")
-model = SentenceTransformer(EMBEDDING_MODEL)
-print("Embedding model loaded.")
-
-# Initialise ChromaDB with persistent storage
-chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-collection = chroma_client.get_or_create_collection(
-    name=COLLECTION_NAME,
-    metadata={"hnsw:space": "cosine"},  # use cosine similarity
-)
-
 # ---------------------------------------------------------------------------
-# Request / Response schemas
+# Schemas
 # ---------------------------------------------------------------------------
-
 class ChunkInput(BaseModel):
     id: str
     source: str
@@ -61,7 +39,6 @@ class ChunkInput(BaseModel):
     content: str
 class IndexRequest(BaseModel):
     chunks: list[ChunkInput]
-    # If true, clear the existing collection before indexing
     reset: bool = False
 class IndexResponse(BaseModel):
     indexed: int
@@ -84,7 +61,6 @@ class HealthResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
-
 @app.get("/health", response_model=HealthResponse)
 def health():
     """Health check — returns status, model name, and indexed document count."""
@@ -96,27 +72,20 @@ def health():
 
 @app.post("/index", response_model=IndexResponse)
 def index_chunks(req: IndexRequest):
-    """
-    Accept knowledge chunks, embed them with SentenceTransformers,
-    and upsert into ChromaDB.
-    """
+    """Accept knowledge chunks, embed and upsert into ChromaDB."""
+    global collection
     if req.reset:
-        # Drop and recreate the collection
         chroma_client.delete_collection(COLLECTION_NAME)
-        global collection
         collection = chroma_client.get_or_create_collection(
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"},
         )
     if not req.chunks:
         return IndexResponse(indexed=0, total=collection.count())
-    # Prepare data for ChromaDB
     ids = [c.id for c in req.chunks]
     documents = [c.content for c in req.chunks]
     metadatas = [{"source": c.source, "title": c.title} for c in req.chunks]
-    # Generate embeddings
     embeddings = model.encode(documents, show_progress_bar=False).tolist()
-    # Upsert into ChromaDB (idempotent — same IDs overwrite)
     BATCH_SIZE = 100
     for i in range(0, len(ids), BATCH_SIZE):
         end = min(i + BATCH_SIZE, len(ids))
@@ -130,27 +99,20 @@ def index_chunks(req: IndexRequest):
 
 @app.post("/query", response_model=QueryResponse)
 def query_chunks(req: QueryRequest):
-    """
-    Accept a query string, embed it, and return the top-K most similar
-    chunks from ChromaDB.
-    """
+    """Accept a query string, embed it, return top-K similar chunks."""
     if collection.count() == 0:
         return QueryResponse(results=[])
-    # Embed the query
     query_embedding = model.encode([req.query], show_progress_bar=False).tolist()
-    # Query ChromaDB
     results = collection.query(
         query_embeddings=query_embedding,
         n_results=min(req.top_k, collection.count()),
         include=["documents", "metadatas", "distances"],
     )
-    # Format results
     query_results: list[QueryResult] = []
     if results and results["ids"] and results["ids"][0]:
         for i in range(len(results["ids"][0])):
-            # ChromaDB returns cosine distance; convert to similarity
             distance = results["distances"][0][i] if results["distances"] else 0
-            similarity = 1.0 - distance  # cosine distance → cosine similarity
+            similarity = 1.0 - distance
             query_results.append(QueryResult(
                 source=results["metadatas"][0][i].get("source", ""),
                 title=results["metadatas"][0][i].get("title", ""),
@@ -162,7 +124,6 @@ def query_chunks(req: QueryRequest):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8100)
