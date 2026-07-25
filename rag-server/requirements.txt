@@ -2,3 +2,7 @@ fastapi
 uvicorn[standard]
 chromadb
 sentence-transformers
+streamlit
+langchain
+langchain-community
+langchain-openai
