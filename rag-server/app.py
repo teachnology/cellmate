@@ -197,4 +197,122 @@ def page_upload():
                 st.code(content[:500], language="text")
 
 
+# ---------------------------------------------------------------------------
+# Page 2: Chat
+# ---------------------------------------------------------------------------
+def page_chat():
+    st.header("💬 Knowledge Base Chat")
+    st.markdown("Ask questions about your course materials. "
+                "Answers are grounded in the knowledge base via RAG retrieval.")
 
+    # Initialise session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # Display chat history
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("sources"):
+                with st.expander("📎 Retrieved sources"):
+                    st.markdown(msg["sources"])
+
+    # Chat input
+    if prompt := st.chat_input("Ask a question about the course materials..."):
+        # Show user message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Retrieve from ChromaDB
+        retrieved_context = ""
+        sources_display = ""
+        if collection.count() > 0:
+            query_embedding = model.encode([prompt], show_progress_bar=False).tolist()
+            results = collection.query(
+                query_embeddings=query_embedding,
+                n_results=min(3, collection.count()),
+                include=["documents", "metadatas", "distances"],
+            )
+            if results and results["ids"] and results["ids"][0]:
+                context_parts = []
+                source_parts = []
+                for i in range(len(results["ids"][0])):
+                    doc = results["documents"][0][i] if results["documents"] else ""
+                    meta = results["metadatas"][0][i] if results["metadatas"] else {}
+                    dist = results["distances"][0][i] if results["distances"] else 0
+                    sim = round(1.0 - dist, 3)
+                    context_parts.append(doc)
+                    source_parts.append(
+                        f"- **{meta.get('source', '?')}** (similarity: {sim})\n  > {doc[:150]}..."
+                    )
+                retrieved_context = "\n\n---\n\n".join(context_parts)
+                sources_display = "\n".join(source_parts)
+
+        # Build LangChain chain
+        if not llm_api_key:
+            with st.chat_message("assistant"):
+                st.error("Please configure LLM API Key in the sidebar.")
+            return
+
+        llm = ChatOpenAI(
+            base_url=llm_api_url,
+            api_key=llm_api_key,
+            model=llm_model,
+            streaming=True,
+        )
+
+        # Build message history for the LLM
+        history_messages = []
+        for msg in st.session_state.messages[:-1]:  # exclude the current user message
+            if msg["role"] == "user":
+                history_messages.append(HumanMessage(content=msg["content"]))
+            else:
+                history_messages.append(AIMessage(content=msg["content"]))
+
+        chat_prompt = ChatPromptTemplate.from_messages([
+            ("system",
+             "You are a helpful Python teaching assistant. "
+             "Answer the student's question based on the following course materials. "
+             "If the materials don't contain relevant information, say so honestly.\n\n"
+             "Course Materials:\n{context}"),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{question}"),
+        ])
+
+        chain = chat_prompt | llm | StrOutputParser()
+
+        # Stream the response
+        with st.chat_message("assistant"):
+            response = st.write_stream(
+                chain.stream({
+                    "context": retrieved_context or "(No relevant materials found in the knowledge base.)",
+                    "history": history_messages,
+                    "question": prompt,
+                })
+            )
+            if sources_display:
+                with st.expander("📎 Retrieved sources"):
+                    st.markdown(sources_display)
+
+        # Save assistant message
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": response,
+            "sources": sources_display,
+        })
+
+    # Sidebar: conversation controls
+    if st.session_state.messages:
+        if st.sidebar.button("🗑️ Clear conversation"):
+            st.session_state.messages = []
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Router
+# ---------------------------------------------------------------------------
+if page == "Upload":
+    page_upload()
+else:
+    page_chat()
