@@ -1001,6 +1001,26 @@ async function insertMarkdownCellBelow(notebook: vscode.NotebookDocument, cellIn
   await vscode.workspace.applyEdit(edit);
 }
 
+/**
+ * Replace the content of a markdown cell at the given index.
+ * Used for streaming updates — progressively replace text as chunks arrive.
+ */
+async function replaceMarkdownCellContent(notebook: vscode.NotebookDocument, cellIndex: number, content: string) {
+  const edit = new vscode.WorkspaceEdit();
+  const newCell = new vscode.NotebookCellData(
+    vscode.NotebookCellKind.Markup,
+    content,
+    'markdown'
+  );
+  // Replace the cell at cellIndex with new content
+  const notebookEdit = vscode.NotebookEdit.replaceCells(
+    new vscode.NotebookRange(cellIndex, cellIndex + 1),
+    [newCell]
+  );
+  edit.set(notebook.uri, [notebookEdit]);
+  await vscode.workspace.applyEdit(edit);
+}
+
 export function activate(ctx: vscode.ExtensionContext) {
   setExtensionContext(ctx);
   const provider: vscode.NotebookCellStatusBarItemProvider = {

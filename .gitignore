@@ -5,3 +5,8 @@ out/
 .env
 package-lock.json
 test.ipynb
+
+# RAG server runtime data
+rag-server/chroma_data/
+rag-server/__pycache__/
+*.pyc
