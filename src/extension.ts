@@ -1614,86 +1614,85 @@ ${feedback}
         const fullPrompt = system_role + prompt;
         log("fullPrompt:", fullPrompt)
 
-        // Call the LLM interface
-        let feedback: string;
+        // Call the LLM interface with streaming output
+        const notebook = editor.notebook;
+        const cellIndex = cell.index;
         try {
-          // Check if using OpenAI-compatible endpoint
           const isOpenAIEndpoint = apiUrl.includes('/chat/completions');
 
           let body: any;
           if (isOpenAIEndpoint) {
-            // OpenAI format for /api/chat/completions
             body = {
               model: modelName,
-              messages: [
-                {
-                  role: "user",
-                  content: fullPrompt
-                }
-              ]
+              messages: [{ role: "user", content: fullPrompt }],
+              stream: true,
             };
           } else {
-            // Ollama format for /ollama/api/generate
             body = {
               model: modelName,
-              prompt: fullPrompt
+              prompt: fullPrompt,
+              stream: true,
             };
           }
 
-          // log('=== API Request Debug ===');
-          // log('API URL:', apiUrl);
-          // log('Model Name:', modelName);
-          // log('Is OpenAI Endpoint:', isOpenAIEndpoint);
-          // log('Request Body:', JSON.stringify(body, null, 2));
-          // log('=== End API Request Debug ===');
+          // Insert an empty markdown cell immediately for streaming
+          await insertMarkdownCellBelow(notebook, cellIndex, '# **AI Feedback**\n\n⏳ Generating...');
+          const targetCellIndex = cellIndex + 1;
 
-          const resp = await axios.post(
-            apiUrl,
-            body,
-            {
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`
-              },
-              responseType: isOpenAIEndpoint ? 'json' : 'text'
-            }
-          );
+          // Stream the response
+          const resp = await axios.post(apiUrl, body, {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+            },
+            responseType: 'text',
+            // Prevent axios from parsing the SSE stream as JSON
+            transformResponse: [(data: any) => data],
+          });
 
-          // log('=== API Response Debug ===');
-          // log('Response Status:', resp.status);
-          // log('Response Headers:', resp.headers);
-          // log('=== End API Response Debug ===');
+          // Parse the SSE / NDJSON response
+          let fullFeedback = '';
+          const rawText: string = resp.data;
+          const lines = rawText.split('\n').filter((line: string) => line.trim());
 
-          if (isOpenAIEndpoint) {
-            // Handle OpenAI format response
-            if (resp.data.choices && resp.data.choices[0] && resp.data.choices[0].message) {
-              feedback = resp.data.choices[0].message.content;
-            } else {
-              throw new Error('Invalid OpenAI response format');
-            }
-          } else {
-            // Handle Ollama streaming response
-            const lines = resp.data.split('\n').filter((line: string) => line.trim());
-            let fullResponse = '';
-
-            for (const line of lines) {
-              try {
-                const jsonResponse = JSON.parse(line);
-                if (jsonResponse.response) {
-                  fullResponse += jsonResponse.response;
-                }
-              } catch (e) {
-                console.warn('Failed to parse JSON line:', line);
+          for (const line of lines) {
+            try {
+              let jsonStr = line;
+              // OpenAI SSE format: "data: {...}"
+              if (line.startsWith('data: ')) {
+                jsonStr = line.slice(6);
               }
-            }
+              if (jsonStr === '[DONE]') break;
 
-            if (!fullResponse) {
-              console.error('No valid response content found');
-              throw new Error('No valid response content received from API.');
+              const parsed = JSON.parse(jsonStr);
+
+              let chunk = '';
+              if (isOpenAIEndpoint) {
+                // OpenAI streaming: choices[0].delta.content
+                chunk = parsed.choices?.[0]?.delta?.content || '';
+              } else {
+                // Ollama streaming: response field
+                chunk = parsed.response || '';
+              }
+
+              if (chunk) {
+                fullFeedback += chunk;
+                // Update the cell content progressively
+                const displayContent = `# **AI Feedback**\n\n${fullFeedback.replace(/\n/g, '  \n')}`;
+                await replaceMarkdownCellContent(notebook, targetCellIndex, displayContent);
+              }
+            } catch (parseErr) {
+              // Skip unparseable lines (e.g., keep-alive comments)
             }
-            feedback = fullResponse;
           }
-          // log('feedback:', feedback)
+
+          // Final update with complete content
+          if (!fullFeedback.trim()) {
+            throw new Error('No valid response content received from API.');
+          }
+          const finalContent = `# **AI Feedback**\n\n${fullFeedback.replace(/\n/g, '  \n')}`;
+          await replaceMarkdownCellContent(notebook, targetCellIndex, finalContent);
+          log('Streaming feedback complete');
 
         } catch (e: any) {
           let errorMessage = 'AI API call failed: ' + e.message;
@@ -1702,11 +1701,6 @@ ${feedback}
           }
           return vscode.window.showErrorMessage(errorMessage);
         }
-
-        const notebook = editor.notebook;
-        const cellIndex = cell.index;
-        const content = `# **AI Feedback**\n\n${feedback.replace(/\n/g, '  \n')}`;
-        await insertMarkdownCellBelow(notebook, cellIndex, content);
       }
     )
   );
