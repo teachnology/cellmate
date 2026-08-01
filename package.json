@@ -232,6 +232,10 @@
       {
         "command": "CellMate.askFollowUpFromButton",
         "title": "Ask Follow-up Question (via Button)"
+      },
+      {
+        "command": "CellMate.prestudyGuide",
+        "title": "Pre-study Guide - Get prerequisite knowledge"
       }
     ],
     "notebookCellStatusBarItemProviders": [

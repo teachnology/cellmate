@@ -1065,6 +1065,20 @@ export function activate(ctx: vscode.ExtensionContext) {
           arguments: [cell]
         };
         items.push(item);
+
+        // Pre-study Guide button (RAG-powered)
+        const prestudyItem = new vscode.NotebookCellStatusBarItem(
+          '$(book) Pre-study',
+          vscode.NotebookCellStatusBarAlignment.Right
+        );
+        prestudyItem.priority = 90;
+        prestudyItem.command = {
+          command: 'CellMate.prestudyGuide',
+          title: 'Pre-study Guide',
+          arguments: [cell]
+        };
+        prestudyItem.tooltip = 'Get prerequisite knowledge guide based on course materials';
+        items.push(prestudyItem);
       }
       if (cell.document.languageId === 'markdown') {
         const speechItem = new vscode.NotebookCellStatusBarItem(
