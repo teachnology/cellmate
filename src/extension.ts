@@ -1065,6 +1065,20 @@ export function activate(ctx: vscode.ExtensionContext) {
           arguments: [cell]
         };
         items.push(item);
+
+        // Pre-study Guide button (RAG-powered)
+        const prestudyItem = new vscode.NotebookCellStatusBarItem(
+          '$(book) Pre-study',
+          vscode.NotebookCellStatusBarAlignment.Right
+        );
+        prestudyItem.priority = 90;
+        prestudyItem.command = {
+          command: 'CellMate.prestudyGuide',
+          title: 'Pre-study Guide',
+          arguments: [cell]
+        };
+        prestudyItem.tooltip = 'Get prerequisite knowledge guide based on course materials';
+        items.push(prestudyItem);
       }
       if (cell.document.languageId === 'markdown') {
         const speechItem = new vscode.NotebookCellStatusBarItem(
@@ -1700,6 +1714,150 @@ ${feedback}
             errorMessage += '\nResponse: ' + JSON.stringify(e.response.data, null, 2);
           }
           return vscode.window.showErrorMessage(errorMessage);
+        }
+      }
+    )
+  );
+
+  // Template management commands
+  // ===== Pre-study Guide Command =====
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand(
+      'CellMate.prestudyGuide',
+      async (cell: vscode.NotebookCell) => {
+        const editor = vscode.window.activeNotebookEditor;
+        if (!editor) {
+          return vscode.window.showErrorMessage('No active Notebook editor');
+        }
+
+        const cfg = vscode.workspace.getConfiguration('CellMate');
+        const apiUrl = cfg.get<string>('apiUrl') || '';
+        const apiKey = cfg.get<string>('apiKey') || '';
+        const modelName = cfg.get<string>('modelName') || '';
+        const useRAG = cfg.get<boolean>('useRAG', false);
+        const ragMode = cfg.get<string>('ragMode', 'keyword');
+
+        if (!apiUrl || !apiKey || !modelName) {
+          return vscode.window.showErrorMessage('Please configure CellMate API URL, Key, and Model in settings.');
+        }
+
+        if (!useRAG) {
+          return vscode.window.showWarningMessage('Pre-study Guide requires RAG to be enabled. Please set CellMate.useRAG to true.');
+        }
+
+        const code = cell.document.getText();
+
+        // Extract exercise ID
+        const exId = extractExerciseId(code);
+
+        // Sync and build RAG index
+        await syncGitRepo();
+        if (!hasKnowledgeBase()) {
+          return vscode.window.showWarningMessage('No knowledge/ directory found in promptfolio. Pre-study Guide requires course materials.');
+        }
+
+        // Retrieve RAG context
+        let ragContext = '';
+        if (ragMode === 'chromadb') {
+          try {
+            const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
+            await indexToChromaDB(LOCAL_REPO_PATH, ragServerUrl);
+            ragContext = await queryChromaDB(code, ragServerUrl, 5);
+          } catch (err: any) {
+            log('ChromaDB query failed for prestudy:', err.message);
+          }
+        } else if (ragMode === 'semantic') {
+          try {
+            const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+            await buildSemanticIndex(LOCAL_REPO_PATH, apiUrl, apiKey, embModel);
+            const ragIndex = loadRagIndex();
+            if (ragIndex.length > 0) {
+              const embUrl = deriveEmbeddingUrl(apiUrl);
+              const [queryEmb] = await embedTexts([code.substring(0, 2000)], embUrl, apiKey, embModel);
+              ragContext = retrieveContext(code, ragIndex, 5, queryEmb);
+            }
+          } catch (err: any) {
+            log('Semantic RAG failed for prestudy, falling back to keyword:', err.message);
+            await buildRagIndex(LOCAL_REPO_PATH);
+            const ragIndex = loadRagIndex();
+            ragContext = retrieveContext(code, ragIndex, 5);
+          }
+        } else {
+          await buildRagIndex(LOCAL_REPO_PATH);
+          const ragIndex = loadRagIndex();
+          ragContext = retrieveContext(code, ragIndex, 5);
+        }
+
+        if (!ragContext) {
+          return vscode.window.showWarningMessage('No relevant course materials found for this exercise.');
+        }
+
+        // Load the prestudy_guide prompt template
+        let promptContent: string;
+        try {
+          promptContent = await getPromptContent('prestudy_guide');
+        } catch {
+          return vscode.window.showErrorMessage('prestudy_guide.txt not found in promptfolio/prompts/. Please add it.');
+        }
+
+        // Fill placeholders
+        promptContent = promptContent
+          .replace(/\{\{exercise_id\}\}/g, exId || 'unknown')
+          .replace(/\{\{rag_context\}\}/g, ragContext);
+
+        // Call LLM with streaming
+        const notebook = editor.notebook;
+        const cellIndex = cell.index;
+
+        try {
+          const isOpenAIEndpoint = apiUrl.includes('/chat/completions');
+          const body: any = isOpenAIEndpoint
+            ? { model: modelName, messages: [{ role: "user", content: promptContent }], stream: true }
+            : { model: modelName, prompt: promptContent, stream: true };
+
+          await insertMarkdownCellBelow(notebook, cellIndex, '📖 **Pre-study Guide**\n\n⏳ Generating...');
+          const targetCellIndex = cellIndex + 1;
+
+          const resp = await axios.post(apiUrl, body, {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+            },
+            responseType: 'text',
+            transformResponse: [(data: any) => data],
+          });
+
+          let fullResponse = '';
+          const rawText: string = resp.data;
+          const lines = rawText.split('\n').filter((line: string) => line.trim());
+
+          for (const line of lines) {
+            try {
+              let jsonStr = line;
+              if (line.startsWith('data: ')) jsonStr = line.slice(6);
+              if (jsonStr === '[DONE]') break;
+
+              const parsed = JSON.parse(jsonStr);
+              const chunk = isOpenAIEndpoint
+                ? (parsed.choices?.[0]?.delta?.content || '')
+                : (parsed.response || '');
+
+              if (chunk) {
+                fullResponse += chunk;
+                await replaceMarkdownCellContent(notebook, targetCellIndex,
+                  `📖 **Pre-study Guide**\n\n${fullResponse.replace(/\n/g, '  \n')}`);
+              }
+            } catch { /* skip unparseable */ }
+          }
+
+          if (!fullResponse.trim()) {
+            throw new Error('No response from API.');
+          }
+          await replaceMarkdownCellContent(notebook, targetCellIndex,
+            `📖 **Pre-study Guide**\n\n${fullResponse.replace(/\n/g, '  \n')}`);
+
+        } catch (e: any) {
+          return vscode.window.showErrorMessage('Pre-study Guide failed: ' + e.message);
         }
       }
     )
