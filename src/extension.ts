@@ -1750,19 +1750,40 @@ ${feedback}
         // Extract exercise ID
         const exId = extractExerciseId(code);
 
+        // Build a semantically rich query from exercise metadata
+        // instead of raw code (which has poor overlap with lecture materials)
+        let ragQuery = code;  // fallback: use code if no exercise metadata
+        if (exId) {
+          try {
+            const testFiles = await getTestFiles(exId);
+            const meta = testFiles.metadata;
+            // Compose query from title + description + hints for better retrieval
+            const parts: string[] = [];
+            if (meta.title) parts.push(meta.title);
+            if (meta.description) parts.push(meta.description);
+            if (Array.isArray(meta.hints)) parts.push(meta.hints.join(' '));
+            if (parts.length > 0) {
+              ragQuery = parts.join('\n');
+              log(`Pre-study RAG query built from metadata: "${ragQuery.substring(0, 100)}..."`);
+            }
+          } catch {
+            log('Could not load exercise metadata, using code as RAG query');
+          }
+        }
+
         // Sync and build RAG index
         await syncGitRepo();
         if (!hasKnowledgeBase()) {
           return vscode.window.showWarningMessage('No knowledge/ directory found in promptfolio. Pre-study Guide requires course materials.');
         }
 
-        // Retrieve RAG context
+        // Retrieve RAG context using the metadata-based query
         let ragContext = '';
         if (ragMode === 'chromadb') {
           try {
             const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
             await indexToChromaDB(LOCAL_REPO_PATH, ragServerUrl);
-            ragContext = await queryChromaDB(code, ragServerUrl, 5);
+            ragContext = await queryChromaDB(ragQuery, ragServerUrl, 5);
           } catch (err: any) {
             log('ChromaDB query failed for prestudy:', err.message);
           }
@@ -1773,19 +1794,19 @@ ${feedback}
             const ragIndex = loadRagIndex();
             if (ragIndex.length > 0) {
               const embUrl = deriveEmbeddingUrl(apiUrl);
-              const [queryEmb] = await embedTexts([code.substring(0, 2000)], embUrl, apiKey, embModel);
-              ragContext = retrieveContext(code, ragIndex, 5, queryEmb);
+              const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
+              ragContext = retrieveContext(ragQuery, ragIndex, 5, queryEmb);
             }
           } catch (err: any) {
             log('Semantic RAG failed for prestudy, falling back to keyword:', err.message);
             await buildRagIndex(LOCAL_REPO_PATH);
             const ragIndex = loadRagIndex();
-            ragContext = retrieveContext(code, ragIndex, 5);
+            ragContext = retrieveContext(ragQuery, ragIndex, 5);
           }
         } else {
           await buildRagIndex(LOCAL_REPO_PATH);
           const ragIndex = loadRagIndex();
-          ragContext = retrieveContext(code, ragIndex, 5);
+          ragContext = retrieveContext(ragQuery, ragIndex, 5);
         }
 
         if (!ragContext) {
