@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import axios from 'axios';
 import * as path from 'path';
+import * as cp from 'child_process';
 import { toggleRecording } from './speech';
 import { killLocal } from './localServer';
 import { setExtensionContext } from './localServer';
@@ -1021,8 +1022,149 @@ async function replaceMarkdownCellContent(notebook: vscode.NotebookDocument, cel
   await vscode.workspace.applyEdit(edit);
 }
 
+// ---------------------------------------------------------------------------
+// RAG Server lifecycle management
+// ---------------------------------------------------------------------------
+let ragServerProcess: cp.ChildProcess | null = null;
+
+/**
+ * Check if the rag-server is already running by hitting /health.
+ */
+async function isRagServerRunning(serverUrl: string): Promise<boolean> {
+  try {
+    const resp = await axios.get(`${serverUrl.replace(/\/$/, '')}/health`, { timeout: 3000 });
+    return resp.data?.status === 'ok';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Start the rag-server as a background child process.
+ * Auto-installs Python dependencies if needed.
+ */
+async function startRagServer(extensionPath: string): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration('CellMate');
+  const serverUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
+
+  // Don't start if already running (e.g., user started it manually)
+  if (await isRagServerRunning(serverUrl)) {
+    log('RAG server already running at', serverUrl);
+    return;
+  }
+
+  let ragServerDir = path.join(extensionPath, 'rag-server');
+  let serverScript = path.join(ragServerDir, 'server.py');
+  const fs = require('fs');
+  if (!fs.existsSync(serverScript)) {
+    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+      const wsDir = path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, 'rag-server');
+      if (fs.existsSync(path.join(wsDir, 'server.py'))) {
+        ragServerDir = wsDir;
+        serverScript = path.join(wsDir, 'server.py');
+      }
+    }
+  }
+
+  if (!fs.existsSync(serverScript)) {
+    log('rag-server/server.py not found at', serverScript);
+    return;
+  }
+
+  // Find Python
+  const pythonPath = await getNotebookPythonPath() || 'python3';
+
+  // Install dependencies first (pip install -r requirements.txt)
+  const reqFile = path.join(ragServerDir, 'requirements.txt');
+  if (fs.existsSync(reqFile)) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        cp.execFile(pythonPath, ['-m', 'pip', 'install', '-r', reqFile, '-q'], { timeout: 120000 }, (err) => {
+          if (err) reject(err); else resolve();
+        });
+      });
+    } catch (err: any) {
+      log('Failed to install rag-server dependencies:', err.message);
+      vscode.window.showWarningMessage('CellMate: Failed to install RAG server dependencies. ChromaDB mode may not work.');
+    }
+  }
+
+  // Spawn the server process
+  log('Starting RAG server from', serverScript);
+  ragServerProcess = cp.spawn(pythonPath, [serverScript], {
+    cwd: ragServerDir,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: false,
+  });
+
+  ragServerProcess.stdout?.on('data', (data: Buffer) => {
+    log('[rag-server]', data.toString().trim());
+  });
+
+  ragServerProcess.stderr?.on('data', (data: Buffer) => {
+    log('[rag-server:err]', data.toString().trim());
+  });
+
+  ragServerProcess.on('exit', (code) => {
+    log(`RAG server exited with code ${code}`);
+    ragServerProcess = null;
+  });
+
+  // Wait for the server to be ready (up to 60s for model download on first run)
+  let ready = false;
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    if (await isRagServerRunning(serverUrl)) {
+      ready = true;
+      break;
+    }
+  }
+
+  if (ready) {
+    log('RAG server started successfully');
+    vscode.window.showInformationMessage('CellMate: RAG server started (ChromaDB mode ready)');
+  } else {
+    log('RAG server failed to start within timeout');
+    vscode.window.showWarningMessage('CellMate: RAG server failed to start. Check Output panel for details.');
+  }
+}
+
+/**
+ * Check configuration and auto start RAG server if ragMode is set to 'chromadb'.
+ */
+async function checkAndStartRagServer(extensionPath: string): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration('CellMate');
+  const ragMode = cfg.get<string>('ragMode', 'keyword');
+  if (ragMode === 'chromadb') {
+    await startRagServer(extensionPath);
+  }
+}
+
+/**
+ * Stop the rag-server child process.
+ */
+function stopRagServer(): void {
+  if (ragServerProcess) {
+    log('Stopping RAG server...');
+    ragServerProcess.kill();
+    ragServerProcess = null;
+  }
+}
+
 export function activate(ctx: vscode.ExtensionContext) {
   setExtensionContext(ctx);
+
+  // Auto-start rag-server if configured for chromadb mode
+  checkAndStartRagServer(ctx.extensionPath);
+
+  // Listen for config changes to auto-start if user switches to chromadb mode
+  ctx.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('CellMate.ragMode') || e.affectsConfiguration('CellMate.useRAG')) {
+        checkAndStartRagServer(ctx.extensionPath);
+      }
+    })
+  );
   const provider: vscode.NotebookCellStatusBarItemProvider = {
     provideCellStatusBarItems(cell) {
       const items = [];
@@ -1750,19 +1892,40 @@ ${feedback}
         // Extract exercise ID
         const exId = extractExerciseId(code);
 
+        // Build a semantically rich query from exercise metadata
+        // instead of raw code (which has poor overlap with lecture materials)
+        let ragQuery = code;  // fallback: use code if no exercise metadata
+        if (exId) {
+          try {
+            const testFiles = await getTestFiles(exId);
+            const meta = testFiles.metadata;
+            // Compose query from title + description + hints for better retrieval
+            const parts: string[] = [];
+            if (meta.title) parts.push(meta.title);
+            if (meta.description) parts.push(meta.description);
+            if (Array.isArray(meta.hints)) parts.push(meta.hints.join(' '));
+            if (parts.length > 0) {
+              ragQuery = parts.join('\n');
+              log(`Pre-study RAG query built from metadata: "${ragQuery.substring(0, 100)}..."`);
+            }
+          } catch {
+            log('Could not load exercise metadata, using code as RAG query');
+          }
+        }
+
         // Sync and build RAG index
         await syncGitRepo();
         if (!hasKnowledgeBase()) {
           return vscode.window.showWarningMessage('No knowledge/ directory found in promptfolio. Pre-study Guide requires course materials.');
         }
 
-        // Retrieve RAG context
+        // Retrieve RAG context using the metadata-based query
         let ragContext = '';
         if (ragMode === 'chromadb') {
           try {
             const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
             await indexToChromaDB(LOCAL_REPO_PATH, ragServerUrl);
-            ragContext = await queryChromaDB(code, ragServerUrl, 5);
+            ragContext = await queryChromaDB(ragQuery, ragServerUrl, 5);
           } catch (err: any) {
             log('ChromaDB query failed for prestudy:', err.message);
           }
@@ -1773,19 +1936,19 @@ ${feedback}
             const ragIndex = loadRagIndex();
             if (ragIndex.length > 0) {
               const embUrl = deriveEmbeddingUrl(apiUrl);
-              const [queryEmb] = await embedTexts([code.substring(0, 2000)], embUrl, apiKey, embModel);
-              ragContext = retrieveContext(code, ragIndex, 5, queryEmb);
+              const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
+              ragContext = retrieveContext(ragQuery, ragIndex, 5, queryEmb);
             }
           } catch (err: any) {
             log('Semantic RAG failed for prestudy, falling back to keyword:', err.message);
             await buildRagIndex(LOCAL_REPO_PATH);
             const ragIndex = loadRagIndex();
-            ragContext = retrieveContext(code, ragIndex, 5);
+            ragContext = retrieveContext(ragQuery, ragIndex, 5);
           }
         } else {
           await buildRagIndex(LOCAL_REPO_PATH);
           const ragIndex = loadRagIndex();
-          ragContext = retrieveContext(code, ragIndex, 5);
+          ragContext = retrieveContext(ragQuery, ragIndex, 5);
         }
 
         if (!ragContext) {
@@ -2588,5 +2751,6 @@ export function deactivate(): void {
   if (ErrorHelperPanel.currentPanel) {
     ErrorHelperPanel.currentPanel.dispose();
   }
+  stopRagServer();
   killLocal();
 }
