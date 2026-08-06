@@ -30,6 +30,7 @@ import {
   extractPromptPlaceholders,
   fillPromptTemplate
 } from './promptUtils';
+import { initFeedbackHistory, getHistory, addRecord, formatHistoryForPrompt, extractLevel, FeedbackRecord } from './feedbackHistory';
 
 const chan = vscode.window.createOutputChannel("Jupyter AI Feedback");
 function toStr(x: any) { try { return typeof x === 'string' ? x : JSON.stringify(x, (_k, v) => v, 2); } catch { return String(x); } }
@@ -1153,6 +1154,7 @@ function stopRagServer(): void {
 
 export function activate(ctx: vscode.ExtensionContext) {
   setExtensionContext(ctx);
+  initFeedbackHistory(ctx);
 
   // Auto-start rag-server if configured for chromadb mode
   checkAndStartRagServer(ctx.extensionPath);
@@ -1586,6 +1588,8 @@ ${feedback}
         // 4. If useHiddenTests is enabled, get test content and run tests
         if (useHiddenTests) {
           const exId = extractExerciseId(code);
+          // Track exercise ID for feedback history (used later)
+          var currentExerciseId = exId || '';
           if (!exId) {
             const exercises = await listLocalExercises();
             const ids = exercises.map((e: any) => e.id).join(', ');
@@ -1716,6 +1720,29 @@ ${feedback}
           placeholderMap.set('hidden_tests', analysis);
         } else {
           placeholderMap.set('hidden_tests', '');
+        }
+
+        // Feedback history: inject past submission records into the prompt
+        const exIdForHistory = extractExerciseId(code) || '';
+        if (exIdForHistory) {
+          const historyText = formatHistoryForPrompt(exIdForHistory);
+          placeholderMap.set('submission_history', historyText);
+        } else {
+          placeholderMap.set('submission_history', '');
+        }
+
+        // Extract test stats for the feedback record
+        let recordTestsPassed = 0;
+        let recordTestsFailed = 0;
+        if (useHiddenTests && analysis) {
+          const passMatch = analysis.match(/(\d+) tests passed/);
+          const summaryMatch = analysis.match(/(\d+) tests, (\d+) passed, (\d+) failed/);
+          if (summaryMatch) {
+            recordTestsPassed = parseInt(summaryMatch[2]);
+            recordTestsFailed = parseInt(summaryMatch[3]);
+          } else if (passMatch) {
+            recordTestsPassed = parseInt(passMatch[1]);
+          }
         }
 
         // RAG: retrieve relevant course materials if enabled
@@ -1849,6 +1876,23 @@ ${feedback}
           const finalContent = `# **AI Feedback**\n\n${fullFeedback.replace(/\n/g, '  \n')}`;
           await replaceMarkdownCellContent(notebook, targetCellIndex, finalContent);
           log('Streaming feedback complete');
+
+          // Save feedback record for iterative learning tracking
+          if (exIdForHistory) {
+            const level = extractLevel(fullFeedback);
+            const record: FeedbackRecord = {
+              timestamp: Date.now(),
+              exerciseId: exIdForHistory,
+              codeSnippet: code.substring(0, 500),
+              level,
+              feedbackSnippet: fullFeedback.substring(0, 300),
+              testsPassed: recordTestsPassed,
+              testsFailed: recordTestsFailed,
+            };
+            await addRecord(record);
+            const attemptNum = getHistory(exIdForHistory).length;
+            log(`Feedback history: saved attempt #${attemptNum} for ${exIdForHistory} [${level}]`);
+          }
 
         } catch (e: any) {
           let errorMessage = 'AI API call failed: ' + e.message;
