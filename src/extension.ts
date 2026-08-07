@@ -30,7 +30,7 @@ import {
   extractPromptPlaceholders,
   fillPromptTemplate
 } from './promptUtils';
-import { initFeedbackHistory, getHistory, addRecord, formatHistoryForPrompt, extractLevel, FeedbackRecord } from './feedbackHistory';
+import { initFeedbackHistory, getHistory, addRecord, formatHistoryForPrompt, formatScaffoldingInstructions, extractLevel, FeedbackRecord } from './feedbackHistory';
 
 const chan = vscode.window.createOutputChannel("Jupyter AI Feedback");
 function toStr(x: any) { try { return typeof x === 'string' ? x : JSON.stringify(x, (_k, v) => v, 2); } catch { return String(x); } }
@@ -1727,8 +1727,12 @@ ${feedback}
         if (exIdForHistory) {
           const historyText = formatHistoryForPrompt(exIdForHistory);
           placeholderMap.set('submission_history', historyText);
+          // Scaffolding: generate tier-specific instructions based on attempt pattern
+          const scaffolding = formatScaffoldingInstructions(exIdForHistory);
+          placeholderMap.set('scaffolding_instructions', scaffolding);
         } else {
           placeholderMap.set('submission_history', '');
+          placeholderMap.set('scaffolding_instructions', '');
         }
 
         // Extract test stats for the feedback record

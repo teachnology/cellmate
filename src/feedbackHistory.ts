@@ -119,6 +119,147 @@ export function formatHistoryForPrompt(exerciseId: string): string {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Scaffolding — Progressive Hint System
+// ---------------------------------------------------------------------------
+
+export type ScaffoldingTier = 'DIRECTION' | 'SPECIFIC' | 'GUIDED' | 'DETAILED';
+
+/**
+ * Determine the scaffolding tier based on attempt count and mistake patterns.
+ *
+ *  DIRECTION  — 1st attempt: brief directional hint
+ *  SPECIFIC   — 2nd attempt: more specific, reference previous feedback
+ *  GUIDED     — 3rd-4th attempt: concrete example / pseudocode hints
+ *  DETAILED   — 5th+ attempt: step-by-step walkthrough (still no full solution)
+ */
+export function getScaffoldingTier(exerciseId: string): ScaffoldingTier {
+  const history = getHistory(exerciseId);
+  const attemptNumber = history.length + 1; // current attempt
+
+  if (attemptNumber <= 1) return 'DIRECTION';
+  if (attemptNumber <= 2) return 'SPECIFIC';
+  if (attemptNumber <= 4) return 'GUIDED';
+  return 'DETAILED';
+}
+
+/**
+ * Detect if the student is repeating the same type of mistake.
+ * Returns the repeated level if the last N attempts share the same level, or null.
+ */
+export function detectRepeatedMistake(exerciseId: string, windowSize: number = 2): string | null {
+  const history = getHistory(exerciseId);
+  if (history.length < windowSize) return null;
+
+  const recent = history.slice(-windowSize);
+  const levels = recent.map(r => r.level);
+  const allSame = levels.every(l => l === levels[0]);
+
+  if (allSame && levels[0] !== 'EXCELLENT' && levels[0] !== 'UNKNOWN') {
+    return levels[0];
+  }
+  return null;
+}
+
+/**
+ * Detect if the student is making progress (test pass rate improving).
+ */
+export function detectProgress(exerciseId: string): 'improving' | 'regressing' | 'stable' | 'none' {
+  const history = getHistory(exerciseId);
+  if (history.length < 2) return 'none';
+
+  const recent = history.slice(-3); // look at last 3
+  const rates = recent.map(r => {
+    const total = r.testsPassed + r.testsFailed;
+    return total > 0 ? r.testsPassed / total : 0;
+  });
+
+  if (rates.length >= 2) {
+    const last = rates[rates.length - 1];
+    const prev = rates[rates.length - 2];
+    if (last > prev) return 'improving';
+    if (last < prev) return 'regressing';
+  }
+  return 'stable';
+}
+
+/**
+ * Generate explicit scaffolding instructions for the LLM prompt.
+ * This tells the LLM exactly what depth of help to provide.
+ */
+export function formatScaffoldingInstructions(exerciseId: string): string {
+  const history = getHistory(exerciseId);
+  const attemptNumber = history.length + 1;
+  const tier = getScaffoldingTier(exerciseId);
+  const repeatedMistake = detectRepeatedMistake(exerciseId);
+  const progress = detectProgress(exerciseId);
+
+  const lines: string[] = [];
+  lines.push(`### Scaffolding Instructions`);
+  lines.push(`- **Current attempt**: #${attemptNumber}`);
+  lines.push(`- **Scaffolding tier**: ${tier}`);
+
+  if (repeatedMistake) {
+    lines.push(`- ⚠️ **Repeated mistake detected**: Student has been stuck at [${repeatedMistake}] level for ${Math.min(history.length, 3)}+ consecutive attempts. They need a different angle of explanation.`);
+  }
+
+  if (progress === 'improving') {
+    lines.push(`- 📈 **Progress detected**: Test pass rate is improving. Acknowledge this improvement!`);
+  } else if (progress === 'regressing') {
+    lines.push(`- 📉 **Regression detected**: Test pass rate decreased from previous attempt. The student may have introduced new bugs while fixing old ones.`);
+  }
+
+  lines.push('');
+
+  switch (tier) {
+    case 'DIRECTION':
+      lines.push(`**DIRECTION tier (≤ 80 words)**: This is the student's first attempt.`);
+      lines.push(`- Give a brief directional hint pointing at the CATEGORY of mistake`);
+      lines.push(`- Do NOT explain the fix in detail`);
+      lines.push(`- Example tone: "Your loop condition needs attention — think about what happens when the input is 0."`);
+      break;
+
+    case 'SPECIFIC':
+      lines.push(`**SPECIFIC tier (≤ 100 words)**: This is the student's 2nd attempt.`);
+      lines.push(`- Reference what was wrong in their previous attempt if the same issue persists`);
+      lines.push(`- Name the specific line/concept that needs fixing (e.g., "your while condition on line 5")`);
+      lines.push(`- Ask a Socratic question to guide their thinking`);
+      lines.push(`- Example tone: "You fixed the syntax error — good progress! Now look at your while loop: what value does 'count' start at, and does that work when a=0?"`);
+      break;
+
+    case 'GUIDED':
+      lines.push(`**GUIDED tier (≤ 150 words)**: The student has tried ${attemptNumber - 1} times already.`);
+      lines.push(`- Explicitly name the concept they are missing`);
+      lines.push(`- Provide a pseudocode hint or a small analogous example (NOT the actual solution)`);
+      lines.push(`- Structure your hint as: (1) what's wrong, (2) the concept to review, (3) pseudocode pattern`);
+      if (repeatedMistake) {
+        lines.push(`- Since they're repeating [${repeatedMistake}], try a DIFFERENT explanation angle than previous feedback`);
+      }
+      lines.push(`- Example tone: "The issue is handling edge cases in your loop. Here's the pattern: first check if the input is a special case (like 0), handle it separately, then use your loop for everything else. Think: if a=0, how many digits does it have?"`);
+      break;
+
+    case 'DETAILED':
+      lines.push(`**DETAILED tier (≤ 200 words)**: The student has tried ${attemptNumber - 1} times and needs significant help.`);
+      lines.push(`- Give a step-by-step breakdown of the approach (without giving the final code)`);
+      lines.push(`- Include a concrete pseudocode skeleton showing the structure`);
+      lines.push(`- Point out exactly which part of their current code deviates from the correct approach`);
+      lines.push(`- Be very explicit about the concept: define it, give a tiny example with numbers`);
+      if (repeatedMistake) {
+        lines.push(`- The student has been stuck at [${repeatedMistake}] for ${history.length} attempts. Consider explaining the concept from a completely different angle.`);
+      }
+      lines.push(`- Example pseudocode format:`);
+      lines.push('  ```');
+      lines.push(`  Step 1: Handle special case (a == 0 → return 1)`);
+      lines.push(`  Step 2: Initialize counter = 0`);
+      lines.push(`  Step 3: While a > 0: divide a by 10, increment counter`);
+      lines.push(`  Step 4: Return counter`);
+      lines.push('  ```');
+      break;
+  }
+
+  return lines.join('\n');
+}
+
 /**
  * Format a timestamp as a relative time string.
  */
@@ -133,3 +274,4 @@ function formatTimeAgo(ts: number): string {
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
 }
+
