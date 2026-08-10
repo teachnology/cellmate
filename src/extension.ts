@@ -21,7 +21,8 @@ import {
   prepareVenv,
   runLocalTest,
   generateSuggestions,
-  generateConciseTestSummary
+  generateConciseTestSummary,
+  generateVisualTestSummary
 } from './testUtils';
 import {
   extractPromptId,
@@ -1584,6 +1585,7 @@ ${feedback}
 
         // 3. Initialize analysis variable
         let analysis = '';
+        let visualTestSummary = '';
 
         // 4. If useHiddenTests is enabled, get test content and run tests
         if (useHiddenTests) {
@@ -1634,6 +1636,9 @@ ${feedback}
           const testResult = await runLocalTest(code, test, venvPython, 15000, resourceDirs);
           // log('=== test result Debug ===');
           log(testResult)
+
+          // Generate visual test summary for student-facing display
+          visualTestSummary = generateVisualTestSummary(testResult);
 
           // Parse test results and generate analysis
           if (testResult.report && testResult.report.tests) {
@@ -1822,8 +1827,13 @@ ${feedback}
             };
           }
 
+          // Build the test summary header (only if tests were run)
+          const testHeader = (typeof visualTestSummary === 'string' && visualTestSummary)
+            ? visualTestSummary + '\n---\n\n'
+            : '';
+
           // Insert an empty markdown cell immediately for streaming
-          await insertMarkdownCellBelow(notebook, cellIndex, '# **AI Feedback**\n\n⏳ Generating...');
+          await insertMarkdownCellBelow(notebook, cellIndex, `# **AI Feedback**\n\n${testHeader}⏳ Generating...`);
           const targetCellIndex = cellIndex + 1;
 
           // Stream the response
@@ -1864,8 +1874,8 @@ ${feedback}
 
               if (chunk) {
                 fullFeedback += chunk;
-                // Update the cell content progressively
-                const displayContent = `# **AI Feedback**\n\n${fullFeedback.replace(/\n/g, '  \n')}`;
+                // Update the cell content progressively (with test summary header)
+                const displayContent = `# **AI Feedback**\n\n${testHeader}${fullFeedback.replace(/\n/g, '  \n')}`;
                 await replaceMarkdownCellContent(notebook, targetCellIndex, displayContent);
               }
             } catch (parseErr) {
@@ -1877,7 +1887,7 @@ ${feedback}
           if (!fullFeedback.trim()) {
             throw new Error('No valid response content received from API.');
           }
-          const finalContent = `# **AI Feedback**\n\n${fullFeedback.replace(/\n/g, '  \n')}`;
+          const finalContent = `# **AI Feedback**\n\n${testHeader}${fullFeedback.replace(/\n/g, '  \n')}`;
           await replaceMarkdownCellContent(notebook, targetCellIndex, finalContent);
           log('Streaming feedback complete');
 

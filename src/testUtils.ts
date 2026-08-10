@@ -148,7 +148,7 @@ export async function runLocalTest(
         const dest = path.join(tmpDir.name, baseName);
         copyDirectoryRecursive(dir, dest);
       }
-    } catch (e:any) {
+    } catch (e: any) {
       vscode.window.showWarningMessage(`Failed to copy resource directories: ${e?.message || e}`);
     }
   }
@@ -340,4 +340,74 @@ export function generateConciseTestSummary(failedTests: any[], totalTests: numbe
   }
 
   return summary;
-} 
+}
+
+/**
+ * Generate a visual, student-facing test result summary for the AI Feedback cell.
+ * This is shown directly to the student (not embedded in the LLM prompt).
+ *
+ * Returns a markdown block with:
+ * - Emoji progress bar
+ * - Pass/fail counts
+ * - Up to 3 failed test details
+ * - All-pass celebration for perfect submissions
+ */
+export function generateVisualTestSummary(testResult: any): string {
+  if (!testResult?.report?.tests) {
+    // No test report available
+    if (testResult?.timeout) {
+      return `> **Test Results**: Execution timed out — your code may contain an infinite loop.\n\n`;
+    }
+    if (testResult?.stderr) {
+      return `> **Test Results**: Tests could not run — code has execution errors.\n\n`;
+    }
+    return '';
+  }
+
+  const tests = testResult.report.tests;
+  const total = tests.length;
+  if (total === 0) {
+    return `> **Test Results**: No tests executed — likely a code error prevents loading.\n\n`;
+  }
+
+  const passed = tests.filter((t: any) => t.outcome === 'passed').length;
+  const failed = total - passed;
+  const rate = Math.round((passed / total) * 100);
+
+  // Build emoji progress bar (10 segments)
+  const filledCount = Math.round((passed / total) * 10);
+  const bar = '🟩'.repeat(filledCount) + '🟥'.repeat(10 - filledCount);
+
+  const lines: string[] = [];
+
+  if (failed === 0) {
+    // All passed — celebration!
+    lines.push(`> ✅ **Test Results**: ${passed}/${total} passed ${bar} **${rate}%**`);
+    lines.push(`>`);
+    lines.push(`> All tests passed! 🎉`);
+  } else {
+    // Has failures — show details
+    lines.push(`> 📋 **Test Results**: ${passed}/${total} passed ${bar} **${rate}%**`);
+
+    const failedTests = tests.filter((t: any) => t.outcome === 'failed');
+    const maxShow = Math.min(failedTests.length, 3);
+
+    for (let i = 0; i < maxShow; i++) {
+      const t = failedTests[i];
+      const testName = t.nodeid?.split('::').pop() || 'Unknown';
+      const assertionLine = extractAssertionLine(t);
+      // Truncate long assertion messages for display
+      const display = assertionLine.length > 100
+        ? assertionLine.substring(0, 97) + '...'
+        : assertionLine;
+      lines.push(`> ❌ \`${testName}\`: ${display}`);
+    }
+
+    if (failedTests.length > maxShow) {
+      lines.push(`> ... and ${failedTests.length - maxShow} more failed test${failedTests.length - maxShow > 1 ? 's' : ''}`);
+    }
+  }
+
+  lines.push('');
+  return lines.join('  \n') + '\n';
+}
