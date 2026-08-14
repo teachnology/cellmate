@@ -1168,6 +1168,52 @@ export function activate(ctx: vscode.ExtensionContext) {
       }
     })
   );
+  // Auto-feedback: listen for cell execution completion via document changes
+  // Track cells that have already been auto-triggered to prevent duplicates
+  const autoFeedbackTriggered = new Set<string>();
+
+  ctx.subscriptions.push(
+    vscode.workspace.onDidChangeNotebookDocument(e => {
+      const cfg = vscode.workspace.getConfiguration('CellMate');
+      const autoFeedback = cfg.get<boolean>('autoFeedback', false);
+      if (!autoFeedback) return;
+
+      for (const cellChange of e.cellChanges) {
+        // Only react when executionSummary changes (= cell finished executing)
+        if (!cellChange.executionSummary) continue;
+
+        const cell = cellChange.cell;
+
+        // Only for code cells with Python
+        if (cell.kind !== vscode.NotebookCellKind.Code) continue;
+        if (cell.document.languageId !== 'python') continue;
+
+        // Only if the cell contains an EXERCISE_ID
+        const code = cell.document.getText();
+        const hasExerciseId = /^\s*#\s*EXERCISE_ID\s*:/m.test(code);
+        if (!hasExerciseId) continue;
+
+        // Debounce: use execution count + cell URI to prevent re-triggering
+        const execCount = cellChange.executionSummary.executionOrder ?? 0;
+        const dedupeKey = `${cell.document.uri.toString()}::${execCount}`;
+        if (autoFeedbackTriggered.has(dedupeKey)) continue;
+        autoFeedbackTriggered.add(dedupeKey);
+
+        // Cap the set size to prevent memory leak
+        if (autoFeedbackTriggered.size > 100) {
+          const firstKey = autoFeedbackTriggered.values().next().value;
+          if (firstKey) autoFeedbackTriggered.delete(firstKey);
+        }
+
+        log('Auto-feedback: cell execution completed, triggering AI feedback...');
+        // Small delay to ensure cell output is fully rendered
+        setTimeout(() => {
+          vscode.commands.executeCommand('CellMate.sendNotebookCell', cell);
+        }, 500);
+      }
+    })
+  );
+
   const provider: vscode.NotebookCellStatusBarItemProvider = {
     provideCellStatusBarItems(cell) {
       const items = [];
@@ -1977,13 +2023,13 @@ ${feedback}
           return vscode.window.showWarningMessage('No knowledge/ directory found in promptfolio. Pre-study Guide requires course materials.');
         }
 
-        // Retrieve RAG context using the metadata-based query
+        // Retrieve RAG context using the metadata-based query (3 chunks for pre-study to keep prompt concise)
         let ragContext = '';
         if (ragMode === 'chromadb') {
           try {
             const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
             await indexToChromaDB(LOCAL_REPO_PATH, ragServerUrl);
-            ragContext = await queryChromaDB(ragQuery, ragServerUrl, 5);
+            ragContext = await queryChromaDB(ragQuery, ragServerUrl, 3);
           } catch (err: any) {
             log('ChromaDB query failed for prestudy:', err.message);
           }
@@ -1995,18 +2041,18 @@ ${feedback}
             if (ragIndex.length > 0) {
               const embUrl = deriveEmbeddingUrl(apiUrl);
               const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
-              ragContext = retrieveContext(ragQuery, ragIndex, 5, queryEmb);
+              ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb);
             }
           } catch (err: any) {
             log('Semantic RAG failed for prestudy, falling back to keyword:', err.message);
             await buildRagIndex(LOCAL_REPO_PATH);
             const ragIndex = loadRagIndex();
-            ragContext = retrieveContext(ragQuery, ragIndex, 5);
+            ragContext = retrieveContext(ragQuery, ragIndex, 3);
           }
         } else {
           await buildRagIndex(LOCAL_REPO_PATH);
           const ragIndex = loadRagIndex();
-          ragContext = retrieveContext(ragQuery, ragIndex, 5);
+          ragContext = retrieveContext(ragQuery, ragIndex, 3);
         }
 
         if (!ragContext) {
@@ -2025,6 +2071,8 @@ ${feedback}
         promptContent = promptContent
           .replace(/\{\{exercise_id\}\}/g, exId || 'unknown')
           .replace(/\{\{rag_context\}\}/g, ragContext);
+
+        log(`Pre-study prompt length: ${promptContent.length} chars`);
 
         // Call LLM with streaming
         const notebook = editor.notebook;
@@ -2046,6 +2094,7 @@ ${feedback}
             },
             responseType: 'text',
             transformResponse: [(data: any) => data],
+            timeout: 120000, // 120s timeout to prevent hanging
           });
 
           let fullResponse = '';
@@ -2078,6 +2127,10 @@ ${feedback}
             `📖 **Pre-study Guide**\n\n${fullResponse.replace(/\n/g, '  \n')}`);
 
         } catch (e: any) {
+          log('Pre-study Guide error:', e.message);
+          if (e.code === 'ECONNABORTED') {
+            return vscode.window.showErrorMessage('Pre-study Guide timed out. The LLM may be overloaded — please try again.');
+          }
           return vscode.window.showErrorMessage('Pre-study Guide failed: ' + e.message);
         }
       }
