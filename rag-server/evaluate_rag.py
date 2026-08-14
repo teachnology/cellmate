@@ -52,3 +52,125 @@ def tokenize(text: str) -> List[str]:
 def hash_id(source: str, title: str) -> str:
     return hashlib.md5(f"{source}::{title}".encode('utf-8')).hexdigest()[:12]
 
+# ---------------------------------------------------------------------------
+# 2. Chunking Logic (Exact match with src/ragUtils.ts)
+# ---------------------------------------------------------------------------
+class RagChunk:
+    def __init__(self, chunk_id: str, source: str, title: str, content: str, tokens: List[str]):
+        self.id = chunk_id
+        self.source = source
+        self.title = title
+        self.content = content
+        self.tokens = tokens
+        self.embedding = None
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'source': self.source,
+            'title': self.title,
+            'content': self.content,
+            'tokens': self.tokens
+        }
+
+def chunk_markdown(content: str, source: str, max_words: int = 500) -> List[RagChunk]:
+    chunks = []
+    sections = re.split(r'^(?=## )', content, flags=re.MULTILINE)
+    for section in sections:
+        trimmed = section.strip()
+        if not trimmed:
+            continue
+        heading_match = re.search(r'^##\s+(.+)$', trimmed, flags=re.MULTILINE)
+        title = heading_match.group(1).strip() if heading_match else os.path.basename(source)
+        words = trimmed.split()
+        if len(words) <= max_words:
+            tokens = list(set(tokenize(trimmed)))
+            chunks.append(RagChunk(hash_id(source, title), source, title, trimmed, tokens))
+        else:
+            paras = re.split(r'\n\n+', trimmed)
+            buf = ''
+            part_idx = 0
+            for p in paras:
+                if buf and len((buf + '\n\n' + p).split()) > max_words:
+                    sub_title = f"{title} (part {part_idx + 1})"
+                    tokens = list(set(tokenize(buf)))
+                    chunks.append(RagChunk(hash_id(source, sub_title), source, sub_title, buf.strip(), tokens))
+                    buf = p
+                    part_idx += 1
+                else:
+                    buf = buf + '\n\n' + p if buf else p
+            if buf.strip():
+                sub_title = f"{title} (part {part_idx + 1})" if part_idx > 0 else title
+                tokens = list(set(tokenize(buf)))
+                chunks.append(RagChunk(hash_id(source, sub_title), source, sub_title, buf.strip(), tokens))
+    return chunks
+
+def chunk_python(content: str, source: str) -> List[RagChunk]:
+    chunks = []
+    blocks = re.split(r'^(?=(?:def |class ))', content, flags=re.MULTILINE)
+    for block in blocks:
+        trimmed = block.strip()
+        if not trimmed:
+            continue
+        name_match = re.search(r'^(?:def|class)\s+(\w+)', trimmed)
+        title = name_match.group(1) if name_match else os.path.basename(source)
+        tokens = list(set(tokenize(trimmed)))
+        chunks.append(RagChunk(hash_id(source, title), source, title, trimmed, tokens))
+    if not chunks and content.strip():
+        title = os.path.basename(source)
+        tokens = list(set(tokenize(content)))
+        chunks.append(RagChunk(hash_id(source, title), source, title, content.strip(), tokens))
+    return chunks
+
+def chunk_notebook(content: str, source: str) -> List[RagChunk]:
+    chunks = []
+    try:
+        nb = json.loads(content)
+    except Exception:
+        return chunks
+    cells = nb.get('cells', [])
+    md_buf = ''
+    md_start_idx = -1
+
+    def flush_md():
+        nonlocal md_buf, md_start_idx
+        if md_buf.strip():
+            sec_source = f"{source} [cells {md_start_idx}+]"
+            chunks.extend(chunk_markdown(md_buf, sec_source))
+        md_buf = ''
+        md_start_idx = -1
+
+    for i, cell in enumerate(cells):
+        src = cell.get('source', '')
+        cell_src = "".join(src) if isinstance(src, list) else src
+        if not cell_src.strip():
+            continue
+        cell_type = cell.get('cell_type', '')
+        if cell_type == 'markdown':
+            if md_start_idx < 0:
+                md_start_idx = i
+            md_buf += cell_src + '\n\n'
+        elif cell_type == 'code':
+            flush_md()
+            code_source = f"{source} [cell {i}]"
+            chunks.extend(chunk_python(cell_src, code_source))
+    flush_md()
+    return chunks
+
+def load_knowledge_base(knowledge_dir: str) -> List[RagChunk]:
+    chunks = []
+    for root, _, files in os.walk(knowledge_dir):
+        for f in sorted(files):
+            full_path = os.path.join(root, f)
+            rel_path = os.path.relpath(full_path, knowledge_dir)
+            if f.endswith('.ipynb'):
+                with open(full_path, 'r', encoding='utf-8') as fp:
+                    chunks.extend(chunk_notebook(fp.read(), rel_path))
+            elif f.endswith('.py'):
+                with open(full_path, 'r', encoding='utf-8') as fp:
+                    chunks.extend(chunk_python(fp.read(), rel_path))
+            elif f.endswith(('.md', '.txt')):
+                with open(full_path, 'r', encoding='utf-8') as fp:
+                    chunks.extend(chunk_markdown(fp.read(), rel_path))
+    return chunks
+
