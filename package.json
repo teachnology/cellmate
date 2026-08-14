@@ -132,6 +132,11 @@
             "type": "boolean",
             "default": false,
             "description": "Show the Expand/Explain button in all markdown cells (not just those containing feedback)"
+          },
+          "CellMate.autoFeedback": {
+            "type": "boolean",
+            "default": false,
+            "description": "Automatically generate AI feedback after executing a code cell that contains an EXERCISE_ID"
           }
         }
       },
