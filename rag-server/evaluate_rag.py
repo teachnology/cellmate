@@ -174,3 +174,53 @@ def load_knowledge_base(knowledge_dir: str) -> List[RagChunk]:
                     chunks.extend(chunk_markdown(fp.read(), rel_path))
     return chunks
 
+# ---------------------------------------------------------------------------
+# 3. Retrieval Engines
+# ---------------------------------------------------------------------------
+def bm25_lite_retrieve(query: str, chunks: List[RagChunk], top_k: int = 10) -> List[Tuple[RagChunk, float]]:
+    """Exact replica of BM25-lite keyword retrieval in src/ragUtils.ts"""
+    query_tokens = list(set(tokenize(query)))
+    if not query_tokens or not chunks:
+        return []
+    N = len(chunks)
+    df = {}
+    for token in query_tokens:
+        count = sum(1 for c in chunks if token in c.tokens)
+        df[token] = count
+    
+    scored = []
+    for c in chunks:
+        score = 0.0
+        chunk_token_set = set(c.tokens)
+        for token in query_tokens:
+            if token in chunk_token_set:
+                term_df = df.get(token, 0)
+                score += math.log(N / (1.0 + term_df))
+        scored.append((c, score))
+    
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [s for s in scored[:top_k] if s[1] > 0]
+
+def dense_retrieve(query_emb: np.ndarray, chunks: List[RagChunk], chunk_embs: np.ndarray, top_k: int = 10) -> List[Tuple[RagChunk, float]]:
+    """Cosine similarity dense retrieval."""
+    # Cosine similarity: dot product of normalized vectors
+    scores = np.dot(chunk_embs, query_emb)
+    ranked_indices = np.argsort(scores)[::-1][:top_k]
+    return [(chunks[idx], float(scores[idx])) for idx in ranked_indices if scores[idx] > 0]
+
+def hybrid_rrf_retrieve(bm25_res: List[Tuple[RagChunk, float]], dense_res: List[Tuple[RagChunk, float]], k: int = 60, top_k: int = 10) -> List[Tuple[RagChunk, float]]:
+    """Reciprocal Rank Fusion (RRF) combining BM25 and Dense embeddings."""
+    rrf_scores = {}
+    chunk_map = {}
+    
+    for rank, (chunk, _) in enumerate(bm25_res):
+        rrf_scores[chunk.id] = rrf_scores.get(chunk.id, 0.0) + (1.0 / (k + rank + 1))
+        chunk_map[chunk.id] = chunk
+        
+    for rank, (chunk, _) in enumerate(dense_res):
+        rrf_scores[chunk.id] = rrf_scores.get(chunk.id, 0.0) + (1.0 / (k + rank + 1))
+        chunk_map[chunk.id] = chunk
+        
+    sorted_items = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+    return [(chunk_map[cid], score) for cid, score in sorted_items[:top_k]]
+
