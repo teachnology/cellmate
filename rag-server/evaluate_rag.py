@@ -295,3 +295,31 @@ def load_benchmark_queries(repo_path: str) -> List[Dict[str, Any]]:
         })
     return queries
 
+# ---------------------------------------------------------------------------
+# 5. Metric Calculations
+# ---------------------------------------------------------------------------
+def evaluate_retrieval(retrieved_chunks: List[Tuple[RagChunk, float]], gt_lecture: str, k_list=[1, 3, 5, 10]) -> Dict[str, Any]:
+    """
+    Check if retrieved chunk's source corresponds to the ground truth lecture.
+    Also checks specific title relevance.
+    """
+    hits = {f'hit@{k}': 0 for k in k_list}
+    first_rank = None
+    
+    for rank, (chunk, score) in enumerate(retrieved_chunks):
+        # A chunk is relevant if it comes from the target lecture
+        is_relevant = gt_lecture.lower() in chunk.source.lower()
+        if is_relevant:
+            if first_rank is None:
+                first_rank = rank + 1  # 1-indexed
+            for k in k_list:
+                if (rank + 1) <= k:
+                    hits[f'hit@{k}'] = 1
+                    
+    reciprocal_rank = 1.0 / first_rank if first_rank is not None else 0.0
+    return {
+        **hits,
+        'reciprocal_rank': reciprocal_rank,
+        'first_rank': first_rank
+    }
+
