@@ -224,3 +224,74 @@ def hybrid_rrf_retrieve(bm25_res: List[Tuple[RagChunk, float]], dense_res: List[
     sorted_items = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
     return [(chunk_map[cid], score) for cid, score in sorted_items[:top_k]]
 
+# ---------------------------------------------------------------------------
+# 4. Evaluation Benchmark Dataset (36 Exercises across 4 Lectures)
+# ---------------------------------------------------------------------------
+def load_benchmark_queries(repo_path: str) -> List[Dict[str, Any]]:
+    tests_dir = os.path.join(repo_path, 'tests')
+    queries = []
+    
+    # Ground truth mapping heuristic:
+    # ex1_* -> lecture1.ipynb
+    # ex2_* -> lecture2.ipynb
+    # ex3_* -> lecture3.ipynb
+    # ex4_* -> lecture4.ipynb
+    lecture_map = {
+        'ex1': 'lecture1.ipynb',
+        'ex2': 'lecture2.ipynb',
+        'ex3': 'lecture3.ipynb',
+        'ex4': 'lecture4.ipynb'
+    }
+    
+    for d in sorted(os.listdir(tests_dir)):
+        ex_dir = os.path.join(tests_dir, d)
+        if not os.path.isdir(ex_dir):
+            continue
+        meta_file = os.path.join(ex_dir, 'metadata.json')
+        test_file = os.path.join(ex_dir, 'test.py')
+        
+        meta = {}
+        if os.path.exists(meta_file):
+            try:
+                with open(meta_file) as f:
+                    meta = json.load(f)
+            except Exception:
+                pass
+                
+        test_code = ""
+        if os.path.exists(test_file):
+            try:
+                with open(test_file) as f:
+                    test_code = f.read()
+            except Exception:
+                pass
+                
+        prefix = d.split('_')[0]
+        gt_lecture = lecture_map.get(prefix, 'lecture1.ipynb')
+        
+        title = meta.get('title', d.replace('_', ' '))
+        desc = meta.get('description', '')
+        hints = " ".join(meta.get('hints', [])) if isinstance(meta.get('hints'), list) else ""
+        
+        # Modality A: Pre-study metadata query (exact same as extension.ts prestudyGuide)
+        prestudy_query = f"{title}\n{desc}\n{hints}".strip()
+        
+        # Modality B: Student code / Error Debugging query (simulated student submission + analysis)
+        code_query = f"def {d}():\n    # student code for {title}\n    {desc}\nAssertionError: failed test on hidden input"
+        
+        # Modality C: Conceptual query
+        concept_query = f"{title} Python {prefix}"
+        
+        queries.append({
+            'id': d,
+            'lecture_prefix': prefix,
+            'gt_lecture': gt_lecture,
+            'title': title,
+            'desc': desc,
+            'hints': hints,
+            'query_prestudy': prestudy_query,
+            'query_code': code_query,
+            'query_concept': concept_query,
+        })
+    return queries
+
