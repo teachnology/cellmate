@@ -204,3 +204,112 @@ Respond ONLY with a JSON object (no markdown, no extra text):
 {{"chunks": [{{"rank": 1, "relevant": true/false, "reason": "brief"}}, ...], "score": <float 0.0-1.0>}}
 """)
 
+# ---------------------------------------------------------------------------
+# Answer Generation (simulate CellMate Pre-study Guide)
+# ---------------------------------------------------------------------------
+
+PRESTUDY_TEMPLATE = textwrap.dedent("""\
+# Role
+You are an expert Python academic tutor responsible for distilling prerequisite knowledge from lecture materials before students attempt an exercise.
+
+# Exercise Context
+- Exercise ID: {exercise_id}
+- Exercise Title: {title}
+- Problem Description: {description}
+
+# Retrieved Course Lecture Materials
+{rag_context}
+
+# Task
+Based on the retrieved course lecture materials above, write a structured, easy-to-read "Pre-study Knowledge Guide" tailored to help the student understand the prerequisite concepts needed for this exercise.
+
+# Strict Grounding & Quality Requirements
+1. **Strict Context Grounding**: Every concept, syntax pattern, and common pitfall you describe MUST be directly grounded in and verifiable from the provided lecture materials above. Prefer terminology, function names, and code structures taught in the course materials.
+2. **Pedagogical Alignment**:
+   - For Beginners: Use clear explanations and relate ideas to simple mechanics introduced in the lectures.
+   - For Advanced students: Explain the underlying algorithmic logic directly.
+3. **No Solution Spoilers**: NEVER provide the complete code solution to the current exercise. Give guidance, conceptual building blocks, and syntax examples only.
+4. **Structure**: Highlight exactly 3 Core Concepts and 2 Common Pitfalls derived from the lecture topics.
+5. **Length**: Keep under 300 words.
+
+## Output Format
+## 📖 Pre-study Guide: {title}
+### 🔑 Core Concepts
+1. **[Concept 1 from lecture]** — [Explanation grounded in course materials]
+2. **[Concept 2 from lecture]** — [Explanation grounded in course materials]
+3. **[Concept 3 from lecture]** — [Explanation grounded in course materials]
+### ⚠️ Common Pitfalls
+1. **[Pitfall 1]** — [Common mistake and how to avoid it based on lecture warnings]
+2. **[Pitfall 2]** — [Common mistake and how to avoid it based on lecture warnings]
+### 💡 Quick Tip
+[One actionable, grounded sentence summarizing the best coding practice for this topic]
+""")
+
+FEEDBACK_TEMPLATE = textwrap.dedent("""\
+You are a Python teaching assistant for programming beginners. Given the uploaded code and hidden test results, offer concise code suggestions on improvement and fixing output errors without directly giving solutions. Be encouraging and constructive in your feedback.
+
+**Problem description**
+{description}
+
+**Code**
+```python
+{student_code}
+```
+
+**Hidden-test analysis**
+{test_analysis}
+
+### Course Materials
+Here are some relevant course materials that might help the student:
+{rag_context}
+
+### Grounding & Pedagogical Rules
+1. **Course Grounding**: When suggesting conceptual fixes or terminology, align directly with the Course Materials provided above. If the lecture introduces a specific syntax, method, or idiom (e.g. while loops, accumulator patterns, list methods), refer to that style.
+2. **Classify the submission**: BROKEN, FAILING, IMPROPER, or EXCELLENT
+3. Provide a concise hint (≤80 words) pointing the student in the right direction.
+4. Do NOT reveal hidden-test data or provide full code solutions.
+""")
+
+# ---------------------------------------------------------------------------
+# Concept Extraction per Exercise (Ground Truth for Context Recall)
+# ---------------------------------------------------------------------------
+
+EXERCISE_CONCEPTS = {
+    "ex1_7_gaussian": ["mathematical formulas", "function definition", "math module (exp, sqrt, pi)"],
+    "ex1_9_period": ["Kepler's third law", "mathematical formula", "exponentiation"],
+    "ex1_11_num_digits": ["while loop", "integer division", "counting iterations"],
+    "ex1_13_odd_numbers": ["while loop", "modulo operator", "list append"],
+    "ex1_14_even_numbers": ["for loop", "range function", "list construction"],
+    "ex1_15_my_sum": ["for loop", "accumulator pattern", "iterating over lists"],
+    "ex1_16_distance": ["list construction", "physics formula", "for loop with range"],
+    "ex1_17_my_cumsum": ["cumulative sum", "list operations", "running total pattern"],
+    "ex1_18_compute_heights": ["while loop", "list append", "physics/bouncing ball"],
+    "ex1_19_calculate_pi": ["series approximation", "for loop", "alternating sum"],
+    "ex2_1_mult": ["function definition", "multiplication", "return values"],
+    "ex2_3_heaviside": ["conditional expressions", "piecewise function", "if/elif/else"],
+    "ex2_4_my_factorial": ["recursion or loop", "factorial definition", "function design"],
+    "ex2_5_path_length": ["list iteration", "distance formula", "sqrt function"],
+    "ex2_6_approx_pi": ["series approximation", "convergence", "while loop"],
+    "ex2_7_prime_list": ["prime number check", "nested loops", "list comprehension"],
+    "ex2_8_h": ["Gaussian function", "math operations", "function composition"],
+    "ex2_9_w_wbits": ["bitwise operations", "binary representation", "while loop"],
+    "ex2_10_multiply": ["nested loops", "multiplication without operator", "accumulation"],
+    "ex2_11_f_cubic": ["polynomial function", "function definition", "return values"],
+    "ex2_12_f_mult": ["function as argument", "higher-order functions", "function composition"],
+    "ex2_13_odd_bits": ["bitwise operations", "binary manipulation", "loop with shifts"],
+    "ex3_4_displacement": ["numpy arrays", "vectorized operations", "physics formula"],
+    "ex3_5_my_factorial": ["recursion", "factorial", "base case"],
+    "ex3_6_wave_speed": ["formula implementation", "square root", "function parameters"],
+    "ex3_8_read_temp_density": ["file I/O", "string parsing", "data extraction"],
+    "ex3_9_compute_velocity": ["numerical differentiation", "arrays", "finite differences"],
+    "ex4_1_read_constants": ["file reading", "dictionary construction", "string splitting"],
+    "ex4_2_reverse_dict": ["dictionary operations", "key-value swap", "dict comprehension"],
+    "ex4_3_triangle_area": ["geometry formula", "function definition", "math operations"],
+    "ex4_4_read_densities": ["file I/O", "dictionary", "data parsing"],
+    "ex4_5_class_F": ["class definition", "methods", "object-oriented programming"],
+    "ex4_6_simple_class": ["class definition", "__init__", "instance methods"],
+    "ex4_7_account_transactions": ["class design", "methods", "state management"],
+    "ex4_8_line_class": ["class definition", "mathematical operations", "method implementation"],
+    "ex4_9_quadratic_class": ["class definition", "quadratic formula", "methods"],
+}
+
