@@ -28,9 +28,7 @@ import os
 import sys
 import json
 import time
-import math
 import re
-import hashlib
 import argparse
 import textwrap
 from typing import List, Dict, Any, Tuple, Optional
@@ -81,17 +79,21 @@ def call_llm(
         }
     for attempt in range(3):
         try:
-            resp = requests.post(api_url, json=body, headers=headers, timeout=120)
+            resp = requests.post(api_url, json=body, headers=headers, timeout=180)
             resp.raise_for_status()
             data = resp.json()
             if is_ollama:
-                return data.get("response", "").strip()
+                raw = data.get("response", "").strip()
             else:
-                return data["choices"][0]["message"]["content"].strip()
+                raw = data["choices"][0]["message"]["content"].strip()
+            # Strip Qwen3 thinking tags if present
+            raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
+            return raw
         except Exception as e:
             if attempt == 2:
-                print(f"  [LLM ERROR] {e}")
+                print(f"  [LLM ERROR after 3 attempts] {e}", flush=True)
                 return ""
+            print(f"  [LLM RETRY {attempt+1}/3: {type(e).__name__}]", flush=True)
             time.sleep(2 ** attempt)
     return ""
 
@@ -318,11 +320,13 @@ EXERCISE_CONCEPTS = {
 # ---------------------------------------------------------------------------
 
 def parse_llm_json(text: str) -> dict:
-    """Extract JSON from LLM response, handling markdown code fences."""
+    """Extract JSON from LLM response, handling markdown code fences and thinking tags."""
+    if not text or not text.strip():
+        return {"score": 0.0, "error": "Empty LLM response"}
+    # Strip Qwen3 thinking tags if present
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     # Strip markdown code fences if present
-    text = text.strip()
     if text.startswith("```"):
-        # Remove first line (```json or ```) and last line (```)
         lines = text.split("\n")
         if lines[0].startswith("```"):
             lines = lines[1:]
@@ -340,6 +344,15 @@ def parse_llm_json(text: str) -> dict:
             except json.JSONDecodeError:
                 pass
         return {"score": 0.0, "error": "Failed to parse LLM response"}
+
+
+def safe_float(value, default: float = 0.0) -> float:
+    """Safely convert a value to float, returning default on failure."""
+    try:
+        v = float(value)
+        return max(0.0, min(1.0, v))  # Clamp to [0, 1]
+    except (TypeError, ValueError):
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -552,4 +565,51 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                   f"Recall={agg['context_recall']:.4f}  "
                   f"Prec={agg['context_precision']:.4f}")
 
-    
+    # 5. Print final summary table
+    print("\n" + "=" * 90)
+    print("RAGAs EVALUATION SUMMARY — LLM-as-a-Judge")
+    print("=" * 90)
+
+    for scenario_name in all_results:
+        print(f"\n### {scenario_name} (N = {len(all_queries)} exercises)")
+        print("-" * 90)
+        print(f"{'Retrieval Engine':<30} | {'Faithfulness':<13} | {'Answer Rel.':<13} | {'Context Rec.':<13} | {'Context Prec.':<13}")
+        print("-" * 90)
+        for engine_name in all_results[scenario_name]:
+            m = all_results[scenario_name][engine_name]
+            print(f"{engine_name:<30} | {m['faithfulness']:>11.4f} | {m['answer_relevancy']:>11.4f} | {m['context_recall']:>11.4f} | {m['context_precision']:>11.4f}")
+
+    # Save results
+    output_dir = os.path.dirname(__file__)
+    summary_path = os.path.join(output_dir, "ragas_eval_separate.json")
+    with open(summary_path, "w") as f:
+        json.dump({"summary": all_results, "detailed": detailed_records}, f, indent=2)
+    print(f"\nResults saved to {summary_path}")
+
+    return all_results, detailed_records
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CellMate RAGAs LLM-as-a-Judge Evaluation")
+    parser.add_argument("--api-url", type=str,
+                        default=os.environ.get("CELLMATE_API_URL", ""),
+                        help="LLM API endpoint (OpenAI-compatible /chat/completions)")
+    parser.add_argument("--api-key", type=str,
+                        default=os.environ.get("CELLMATE_API_KEY", ""),
+                        help="API key")
+    parser.add_argument("--model", type=str,
+                        default=os.environ.get("CELLMATE_MODEL", "gpt-oss:120b"),
+                        help="Model name")
+    parser.add_argument("--sample", type=int, default=0,
+                        help="Number of exercises to sample (0 = all 36)")
+    args = parser.parse_args()
+
+    if not args.api_url or not args.api_key:
+        print("Error: --api-url and --api-key are required.")
+        print("  Or set CELLMATE_API_URL and CELLMATE_API_KEY environment variables.")
+        sys.exit(1)
+
+    run_ragas_evaluation(args.api_url, args.api_key, args.model, args.sample)
