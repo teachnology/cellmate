@@ -323,3 +323,193 @@ def evaluate_retrieval(retrieved_chunks: List[Tuple[RagChunk, float]], gt_lectur
         'first_rank': first_rank
     }
 
+# ---------------------------------------------------------------------------
+# 6. Main Evaluation Pipeline
+# ---------------------------------------------------------------------------
+def run_evaluation():
+    repo_path = '/Users/zq425/Desktop/promptfolio'
+    if not os.path.exists(repo_path):
+        repo_path = '/tmp/promptfolio_repo'
+    knowledge_dir = os.path.join(repo_path, 'knowledge')
+    
+    print(f"Loading knowledge base from: {knowledge_dir}")
+    chunks = load_knowledge_base(knowledge_dir)
+    print(f"Total knowledge chunks extracted: {len(chunks)}")
+    
+    # Check chunks per lecture
+    chunk_counts = {}
+    for c in chunks:
+        base = c.source.split()[0]
+        chunk_counts[base] = chunk_counts.get(base, 0) + 1
+    print("Chunks distribution:")
+    for k, v in sorted(chunk_counts.items()):
+        print(f"  - {k}: {v} chunks")
+        
+    print("\nLoading SentenceTransformer model ('all-MiniLM-L6-v2')...")
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+    
+    chunk_texts = [f"{c.title}\n{c.content}" for c in chunks]
+    print(f"Embedding {len(chunk_texts)} chunks...")
+    chunk_embs = model.encode(chunk_texts, show_progress_bar=False, normalize_embeddings=True)
+    
+    for i, c in enumerate(chunks):
+        c.embedding = chunk_embs[i]
+        
+    # Setup in-memory ChromaDB
+    print("Initializing ChromaDB collection...")
+    chroma_client = chromadb.Client(Settings(anonymized_telemetry=False, is_persistent=False))
+    collection = chroma_client.create_collection(
+        name="eval_collection",
+        metadata={"hnsw:space": "cosine"}
+    )
+    collection.add(
+        ids=[c.id for c in chunks],
+        documents=[c.content for c in chunks],
+        metadatas=[{"source": c.source, "title": c.title} for c in chunks],
+        embeddings=chunk_embs.tolist()
+    )
+    print("ChromaDB index populated.")
+    
+    queries = load_benchmark_queries(repo_path)
+    print(f"Loaded {len(queries)} benchmark queries across exercises.\n")
+    
+    methods = ['BM25-lite (Keyword)', 'Dense Embedding (Cosine)', 'ChromaDB Backend', 'Hybrid (BM25 + Dense RRF)']
+    modalities = [
+        ('Pre-study Metadata Query', 'query_prestudy'),
+        ('Student Code / Debugging Query', 'query_code'),
+        ('Conceptual Query', 'query_concept')
+    ]
+    
+    results = {}
+    detailed_logs = []
+    
+    for mod_name, mod_key in modalities:
+        results[mod_name] = {}
+        for method in methods:
+            results[mod_name][method] = {
+                'hit@1': [], 'hit@3': [], 'hit@5': [], 'hit@10': [], 'mrr': [], 'latency_ms': []
+            }
+            
+        for q in queries:
+            query_text = q[mod_key]
+            gt = q['gt_lecture']
+            
+            # 1. BM25-lite
+            t0 = time.perf_counter()
+            bm25_res = bm25_lite_retrieve(query_text, chunks, top_k=10)
+            t1 = time.perf_counter()
+            bm25_metrics = evaluate_retrieval(bm25_res, gt)
+            bm25_lat = (t1 - t0) * 1000
+            
+            results[mod_name]['BM25-lite (Keyword)']['hit@1'].append(bm25_metrics['hit@1'])
+            results[mod_name]['BM25-lite (Keyword)']['hit@3'].append(bm25_metrics['hit@3'])
+            results[mod_name]['BM25-lite (Keyword)']['hit@5'].append(bm25_metrics['hit@5'])
+            results[mod_name]['BM25-lite (Keyword)']['hit@10'].append(bm25_metrics['hit@10'])
+            results[mod_name]['BM25-lite (Keyword)']['mrr'].append(bm25_metrics['reciprocal_rank'])
+            results[mod_name]['BM25-lite (Keyword)']['latency_ms'].append(bm25_lat)
+            
+            # 2. Dense Embedding (Cosine)
+            t0 = time.perf_counter()
+            q_emb = model.encode([query_text], normalize_embeddings=True)[0]
+            dense_res = dense_retrieve(q_emb, chunks, chunk_embs, top_k=10)
+            t1 = time.perf_counter()
+            dense_metrics = evaluate_retrieval(dense_res, gt)
+            dense_lat = (t1 - t0) * 1000
+            
+            results[mod_name]['Dense Embedding (Cosine)']['hit@1'].append(dense_metrics['hit@1'])
+            results[mod_name]['Dense Embedding (Cosine)']['hit@3'].append(dense_metrics['hit@3'])
+            results[mod_name]['Dense Embedding (Cosine)']['hit@5'].append(dense_metrics['hit@5'])
+            results[mod_name]['Dense Embedding (Cosine)']['hit@10'].append(dense_metrics['hit@10'])
+            results[mod_name]['Dense Embedding (Cosine)']['mrr'].append(dense_metrics['reciprocal_rank'])
+            results[mod_name]['Dense Embedding (Cosine)']['latency_ms'].append(dense_lat)
+            
+            # 3. ChromaDB Backend
+            t0 = time.perf_counter()
+            chroma_q_res = collection.query(
+                query_embeddings=[q_emb.tolist()],
+                n_results=10,
+                include=["metadatas", "distances"]
+            )
+            t1 = time.perf_counter()
+            chroma_res = []
+            if chroma_q_res and chroma_q_res["ids"] and chroma_q_res["ids"][0]:
+                for idx in range(len(chroma_q_res["ids"][0])):
+                    cid = chroma_q_res["ids"][0][idx]
+                    src = chroma_q_res["metadatas"][0][idx].get("source", "")
+                    title = chroma_q_res["metadatas"][0][idx].get("title", "")
+                    chunk_obj = next((c for c in chunks if c.id == cid), RagChunk(cid, src, title, "", []))
+                    dist = chroma_q_res["distances"][0][idx]
+                    chroma_res.append((chunk_obj, 1.0 - dist))
+            chroma_metrics = evaluate_retrieval(chroma_res, gt)
+            chroma_lat = (t1 - t0) * 1000
+            
+            results[mod_name]['ChromaDB Backend']['hit@1'].append(chroma_metrics['hit@1'])
+            results[mod_name]['ChromaDB Backend']['hit@3'].append(chroma_metrics['hit@3'])
+            results[mod_name]['ChromaDB Backend']['hit@5'].append(chroma_metrics['hit@5'])
+            results[mod_name]['ChromaDB Backend']['hit@10'].append(chroma_metrics['hit@10'])
+            results[mod_name]['ChromaDB Backend']['mrr'].append(chroma_metrics['reciprocal_rank'])
+            results[mod_name]['ChromaDB Backend']['latency_ms'].append(chroma_lat)
+            
+            # 4. Hybrid (BM25 + Dense RRF)
+            t0 = time.perf_counter()
+            hybrid_res = hybrid_rrf_retrieve(bm25_res, dense_res, k=60, top_k=10)
+            t1 = time.perf_counter()
+            hybrid_metrics = evaluate_retrieval(hybrid_res, gt)
+            hybrid_lat = (t1 - t0) * 1000 + bm25_lat + dense_lat
+            
+            results[mod_name]['Hybrid (BM25 + Dense RRF)']['hit@1'].append(hybrid_metrics['hit@1'])
+            results[mod_name]['Hybrid (BM25 + Dense RRF)']['hit@3'].append(hybrid_metrics['hit@3'])
+            results[mod_name]['Hybrid (BM25 + Dense RRF)']['hit@5'].append(hybrid_metrics['hit@5'])
+            results[mod_name]['Hybrid (BM25 + Dense RRF)']['hit@10'].append(hybrid_metrics['hit@10'])
+            results[mod_name]['Hybrid (BM25 + Dense RRF)']['mrr'].append(hybrid_metrics['reciprocal_rank'])
+            results[mod_name]['Hybrid (BM25 + Dense RRF)']['latency_ms'].append(hybrid_lat)
+            
+            detailed_logs.append({
+                'exercise_id': q['id'],
+                'modality': mod_name,
+                'target_lecture': gt,
+                'bm25_top1': bm25_res[0][0].source if bm25_res else 'None',
+                'dense_top1': dense_res[0][0].source if dense_res else 'None',
+                'bm25_mrr': bm25_metrics['reciprocal_rank'],
+                'dense_mrr': dense_metrics['reciprocal_rank'],
+            })
+
+    # Summary table generation
+    print("=" * 90)
+    print("CELLMATE RAG EVALUATION BENCHMARK RESULTS")
+    print("=" * 90)
+    
+    summary_data = {}
+    for mod_name in results:
+        print(f"\n### Query Modality: {mod_name} (N = {len(queries)} queries)")
+        print("-" * 90)
+        print(f"{'Retrieval Engine':<28} | {'Hit@1':<8} | {'Hit@3':<8} | {'Hit@5':<8} | {'Hit@10':<8} | {'MRR':<8} | {'Latency':<8}")
+        print("-" * 90)
+        summary_data[mod_name] = {}
+        for method in methods:
+            h1 = np.mean(results[mod_name][method]['hit@1']) * 100
+            h3 = np.mean(results[mod_name][method]['hit@3']) * 100
+            h5 = np.mean(results[mod_name][method]['hit@5']) * 100
+            h10 = np.mean(results[mod_name][method]['hit@10']) * 100
+            mrr = np.mean(results[mod_name][method]['mrr'])
+            lat = np.mean(results[mod_name][method]['latency_ms'])
+            
+            summary_data[mod_name][method] = {
+                'hit@1': round(h1, 2),
+                'hit@3': round(h3, 2),
+                'hit@5': round(h5, 2),
+                'hit@10': round(h10, 2),
+                'mrr': round(mrr, 4),
+                'latency_ms': round(lat, 2)
+            }
+            print(f"{method:<28} | {h1:>6.1f}% | {h3:>6.1f}% | {h5:>6.1f}% | {h10:>6.1f}% | {mrr:>6.4f} | {lat:>6.2f}ms")
+            
+    # Save raw json output
+    output_json_path = os.path.join(os.path.dirname(__file__), 'rag_eval_results.json')
+    with open(output_json_path, 'w', encoding='utf-8') as fp:
+        json.dump(summary_data, fp, indent=2)
+    print(f"\nResults saved to {output_json_path}")
+    return summary_data
+
+if __name__ == '__main__':
+    run_evaluation()
