@@ -1,0 +1,104 @@
+{
+  "Pre-study Metadata Query": {
+    "BM25-lite (Keyword)": {
+      "hit@1": 88.89,
+      "hit@3": 94.44,
+      "hit@5": 94.44,
+      "hit@10": 97.22,
+      "mrr": 0.9206,
+      "latency_ms": 6.43
+    },
+    "Dense Embedding (Cosine)": {
+      "hit@1": 97.22,
+      "hit@3": 97.22,
+      "hit@5": 100.0,
+      "hit@10": 100.0,
+      "mrr": 0.9778,
+      "latency_ms": 165.77
+    },
+    "ChromaDB Backend": {
+      "hit@1": 97.22,
+      "hit@3": 97.22,
+      "hit@5": 100.0,
+      "hit@10": 100.0,
+      "mrr": 0.9778,
+      "latency_ms": 8.06
+    },
+    "Hybrid (BM25 + Dense RRF)": {
+      "hit@1": 91.67,
+      "hit@3": 97.22,
+      "hit@5": 100.0,
+      "hit@10": 100.0,
+      "mrr": 0.9514,
+      "latency_ms": 172.24
+    }
+  },
+  "Student Code / Debugging Query": {
+    "BM25-lite (Keyword)": {
+      "hit@1": 86.11,
+      "hit@3": 91.67,
+      "hit@5": 97.22,
+      "hit@10": 100.0,
+      "mrr": 0.9007,
+      "latency_ms": 5.86
+    },
+    "Dense Embedding (Cosine)": {
+      "hit@1": 94.44,
+      "hit@3": 100.0,
+      "hit@5": 100.0,
+      "hit@10": 100.0,
+      "mrr": 0.9676,
+      "latency_ms": 53.53
+    },
+    "ChromaDB Backend": {
+      "hit@1": 94.44,
+      "hit@3": 100.0,
+      "hit@5": 100.0,
+      "hit@10": 100.0,
+      "mrr": 0.9676,
+      "latency_ms": 7.29
+    },
+    "Hybrid (BM25 + Dense RRF)": {
+      "hit@1": 94.44,
+      "hit@3": 97.22,
+      "hit@5": 100.0,
+      "hit@10": 100.0,
+      "mrr": 0.9653,
+      "latency_ms": 59.42
+    }
+  },
+  "Conceptual Query": {
+    "BM25-lite (Keyword)": {
+      "hit@1": 86.11,
+      "hit@3": 97.22,
+      "hit@5": 97.22,
+      "hit@10": 100.0,
+      "mrr": 0.916,
+      "latency_ms": 1.56
+    },
+    "Dense Embedding (Cosine)": {
+      "hit@1": 94.44,
+      "hit@3": 100.0,
+      "hit@5": 100.0,
+      "hit@10": 100.0,
+      "mrr": 0.9722,
+      "latency_ms": 163.2
+    },
+    "ChromaDB Backend": {
+      "hit@1": 94.44,
+      "hit@3": 100.0,
+      "hit@5": 100.0,
+      "hit@10": 100.0,
+      "mrr": 0.9722,
+      "latency_ms": 4.42
+    },
+    "Hybrid (BM25 + Dense RRF)": {
+      "hit@1": 97.22,
+      "hit@3": 100.0,
+      "hit@5": 100.0,
+      "hit@10": 100.0,
+      "mrr": 0.9861,
+      "latency_ms": 164.78
+    }
+  }
+}
