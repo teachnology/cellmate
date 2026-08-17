@@ -313,3 +313,89 @@ EXERCISE_CONCEPTS = {
     "ex4_9_quadratic_class": ["class definition", "quadratic formula", "methods"],
 }
 
+# ---------------------------------------------------------------------------
+# Parse LLM JSON responses safely
+# ---------------------------------------------------------------------------
+
+def parse_llm_json(text: str) -> dict:
+    """Extract JSON from LLM response, handling markdown code fences."""
+    # Strip markdown code fences if present
+    text = text.strip()
+    if text.startswith("```"):
+        # Remove first line (```json or ```) and last line (```)
+        lines = text.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Try to find JSON object in text
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+        return {"score": 0.0, "error": "Failed to parse LLM response"}
+
+
+# ---------------------------------------------------------------------------
+# Main RAGAs Evaluation
+# ---------------------------------------------------------------------------
+
+def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: int = 0):
+    """Run full RAGAs evaluation across all retrieval engines."""
+    repo_path = '/Users/zq425/Desktop/promptfolio'
+    if not os.path.exists(repo_path):
+        repo_path = '/tmp/promptfolio_repo'
+    knowledge_dir = os.path.join(repo_path, 'knowledge')
+
+    print("=" * 70)
+    print("CellMate RAGAs: LLM-as-a-Judge Evaluation")
+    print(f"Model: {model}")
+    print(f"API: {api_url}")
+    print("=" * 70)
+
+    # 1. Load knowledge base and embeddings
+    print("\n[1/5] Loading knowledge base...")
+    chunks = load_knowledge_base(knowledge_dir)
+    print(f"  → {len(chunks)} chunks loaded")
+
+    from sentence_transformers import SentenceTransformer
+    print("[2/5] Loading embedding model...")
+    emb_model = SentenceTransformer('all-MiniLM-L6-v2')
+    chunk_texts = [f"{c.title}\n{c.content}" for c in chunks]
+    chunk_embs = emb_model.encode(chunk_texts, show_progress_bar=False, normalize_embeddings=True)
+    for i, c in enumerate(chunks):
+        c.embedding = chunk_embs[i]
+
+    # 2. Load benchmark queries
+    print("[3/5] Loading benchmark queries...")
+    all_queries = load_benchmark_queries(repo_path)
+    if sample_size > 0 and sample_size < len(all_queries):
+        # Deterministic sampling across all lecture prefixes
+        import random
+        random.seed(42)
+        all_queries = random.sample(all_queries, sample_size)
+    print(f"  → {len(all_queries)} exercises to evaluate")
+
+    # 3. Define retrieval engines to evaluate
+    engines = {
+        "BM25-lite (Keyword)": lambda query: bm25_lite_retrieve(query, chunks, top_k=3),
+        "Dense Embedding (ChromaDB)": lambda query: dense_retrieve(
+            emb_model.encode([query], normalize_embeddings=True)[0],
+            chunks, chunk_embs, top_k=3
+        ),
+        "Hybrid (BM25 + Dense RRF)": lambda query: hybrid_rrf_retrieve(
+            bm25_lite_retrieve(query, chunks, top_k=10),
+            dense_retrieve(
+                emb_model.encode([query], normalize_embeddings=True)[0],
+                chunks, chunk_embs, top_k=10
+            ),
+            k=60, top_k=3
+        ),
+    }
+
