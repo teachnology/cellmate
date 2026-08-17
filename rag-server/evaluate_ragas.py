@@ -399,3 +399,157 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
         ),
     }
 
+    # 4. Evaluate each engine across both scenarios
+    scenarios = [
+        ("Pre-study Guide", "query_prestudy", PRESTUDY_TEMPLATE),
+        ("AI Feedback", "query_code", FEEDBACK_TEMPLATE),
+    ]
+
+    all_results = {}
+    detailed_records = []
+
+    print("[4/5] Running RAGAs evaluation (this takes several minutes)...\n")
+
+    for scenario_name, query_key, answer_template in scenarios:
+        print(f"━━━ Scenario: {scenario_name} ━━━")
+        all_results[scenario_name] = {}
+
+        for engine_name, retrieve_fn in engines.items():
+            print(f"\n  Engine: {engine_name}")
+            metrics = {
+                "faithfulness": [],
+                "answer_relevancy": [],
+                "context_recall": [],
+                "context_precision": [],
+            }
+
+            for idx, q in enumerate(all_queries):
+                ex_id = q['id']
+                query_text = q[query_key]
+                title = q['title']
+                desc = q['desc']
+                concepts = EXERCISE_CONCEPTS.get(ex_id, ["programming concepts", "Python syntax", "problem solving"])
+
+                t_exercise = time.time()
+                print(f"    [{idx+1}/{len(all_queries)}] {ex_id}...", end="", flush=True)
+
+                # A. Retrieve context
+                retrieved = retrieve_fn(query_text)
+                context_str = "\n\n---\n\n".join(
+                    [f"### {c.title}\n*(Source: {c.source})*\n\n{c.content}" for c, _ in retrieved]
+                )
+
+                if not context_str.strip():
+                    print(" (no context) skip")
+                    for k in metrics:
+                        metrics[k].append(0.0)
+                    continue
+
+                # B. Generate answer using the RAG prompt
+                if scenario_name == "Pre-study Guide":
+                    gen_prompt = answer_template.format(
+                        exercise_id=ex_id,
+                        title=title,
+                        description=desc,
+                        rag_context=context_str,
+                    )
+                else:
+                    # Simulated student code for feedback scenario
+                    student_code = f"# EXERCISE_ID: {ex_id}\ndef {ex_id.split('_', 2)[-1]}():\n    pass  # TODO"
+                    test_analysis = "3 tests, 0 passed, 3 failed (0%)\nFailing: test_basic, test_edge, test_negative"
+                    gen_prompt = answer_template.format(
+                        description=desc,
+                        student_code=student_code,
+                        test_analysis=test_analysis,
+                        rag_context=context_str,
+                    )
+
+                answer = call_llm(gen_prompt, api_url, api_key, model, temperature=0.0, max_tokens=800)
+                if not answer:
+                    print(" (LLM error) skip")
+                    for k in metrics:
+                        metrics[k].append(0.0)
+                    continue
+
+                # C. Evaluate Faithfulness
+                faith_prompt = FAITHFULNESS_PROMPT.format(
+                    context=context_str[:3000],
+                    question=query_text[:500],
+                    answer=answer[:1500],
+                )
+                faith_resp = call_llm(faith_prompt, api_url, api_key, model, temperature=0.0)
+                faith_data = parse_llm_json(faith_resp)
+                faith_score = safe_float(faith_data.get("score", 0.0))
+                metrics["faithfulness"].append(faith_score)
+
+                # D. Evaluate Answer Relevancy
+                rel_prompt = ANSWER_RELEVANCY_PROMPT.format(
+                    question=query_text[:500],
+                    answer=answer[:1500],
+                )
+                rel_resp = call_llm(rel_prompt, api_url, api_key, model, temperature=0.0)
+                rel_data = parse_llm_json(rel_resp)
+                rel_score = safe_float(rel_data.get("score", 0.0))
+                metrics["answer_relevancy"].append(rel_score)
+
+                # E. Evaluate Context Recall
+                recall_prompt = CONTEXT_RECALL_PROMPT.format(
+                    exercise_id=ex_id,
+                    title=title,
+                    description=desc[:300],
+                    concepts=", ".join(concepts),
+                    context=context_str[:3000],
+                )
+                recall_resp = call_llm(recall_prompt, api_url, api_key, model, temperature=0.0)
+                recall_data = parse_llm_json(recall_resp)
+                recall_score = safe_float(recall_data.get("score", 0.0))
+                metrics["context_recall"].append(recall_score)
+
+                # F. Evaluate Context Precision
+                chunks_with_ranks = "\n".join([
+                    f"**Rank {i+1}:** [{c.title}] (Source: {c.source})\n{c.content[:300]}..."
+                    for i, (c, _) in enumerate(retrieved)
+                ])
+                prec_prompt = CONTEXT_PRECISION_PROMPT.format(
+                    exercise_id=ex_id,
+                    title=title,
+                    description=desc[:300],
+                    chunks_with_ranks=chunks_with_ranks,
+                )
+                prec_resp = call_llm(prec_prompt, api_url, api_key, model, temperature=0.0)
+                prec_data = parse_llm_json(prec_resp)
+                prec_score = safe_float(prec_data.get("score", 0.0))
+                metrics["context_precision"].append(prec_score)
+
+                elapsed = time.time() - t_exercise
+                print(f" F={faith_score:.2f} R={rel_score:.2f} CR={recall_score:.2f} CP={prec_score:.2f} ({elapsed:.1f}s)", flush=True)
+
+                detailed_records.append({
+                    "scenario": scenario_name,
+                    "engine": engine_name,
+                    "exercise_id": ex_id,
+                    "title": title,
+                    "faithfulness": faith_score,
+                    "answer_relevancy": rel_score,
+                    "context_recall": recall_score,
+                    "context_precision": prec_score,
+                    "answer_preview": answer[:200],
+                    "context_titles": [c.title for c, _ in retrieved],
+                    "elapsed_seconds": round(elapsed, 1),
+                })
+
+                # Rate limiting: small delay between exercises
+                time.sleep(0.5)
+
+            # Aggregate metrics for this engine
+            agg = {}
+            for k, values in metrics.items():
+                agg[k] = round(np.mean(values), 4) if values else 0.0
+            all_results[scenario_name][engine_name] = agg
+            print(f"\n  ► {engine_name} averages: "
+                  f"Faith={agg['faithfulness']:.4f}  "
+                  f"Rel={agg['answer_relevancy']:.4f}  "
+                  f"Recall={agg['context_recall']:.4f}  "
+                  f"Prec={agg['context_precision']:.4f}")
+
+    
