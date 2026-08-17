@@ -1999,10 +1999,14 @@ ${feedback}
         // Build a semantically rich query from exercise metadata
         // instead of raw code (which has poor overlap with lecture materials)
         let ragQuery = code;  // fallback: use code if no exercise metadata
+        let exerciseTitle = exId || 'Python Exercise';
+        let exerciseDesc = '';
         if (exId) {
           try {
             const testFiles = await getTestFiles(exId);
             const meta = testFiles.metadata;
+            if (meta.title) exerciseTitle = meta.title;
+            if (meta.description) exerciseDesc = meta.description;
             // Compose query from title + description + hints for better retrieval
             const parts: string[] = [];
             if (meta.title) parts.push(meta.title);
@@ -2070,6 +2074,8 @@ ${feedback}
         // Fill placeholders
         promptContent = promptContent
           .replace(/\{\{exercise_id\}\}/g, exId || 'unknown')
+          .replace(/\{\{exercise_title\}\}/g, exerciseTitle)
+          .replace(/\{\{exercise_description\}\}/g, exerciseDesc)
           .replace(/\{\{rag_context\}\}/g, ragContext);
 
         log(`Pre-study prompt length: ${promptContent.length} chars`);
