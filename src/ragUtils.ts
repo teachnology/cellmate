@@ -162,55 +162,84 @@ function chunkPython(content: string, source: string): RagChunk[] {
 }
 
 /**
- * Parse a Jupyter Notebook (.ipynb) file and chunk its cells.
- * Markdown cells are chunked using the markdown chunker.
- * Code cells are chunked using the Python chunker.
+ * Parse a Jupyter Notebook (.ipynb) file and chunk by section headings (##).
+ * Groups markdown explanations together with their associated code examples
+ * into coherent, topic-level learning units.
+ * Automatically filters out hidden test boilerplate cells.
  */
-function chunkNotebook(content: string, source: string): RagChunk[] {
+function chunkNotebook(content: string, source: string, maxWords: number = 600): RagChunk[] {
   const chunks: RagChunk[] = [];
 
   let notebook: any;
   try {
     notebook = JSON.parse(content);
   } catch {
-    // If JSON parsing fails, skip this file
     return chunks;
   }
 
   if (!notebook.cells || !Array.isArray(notebook.cells)) return chunks;
 
-  // Accumulate consecutive markdown cells into sections for better chunking
-  let mdBuffer = '';
-  let mdStartIdx = -1;
+  let currentSectionTitle = path.basename(source);
+  let sectionBuffer = '';
+  let startCellIdx = 0;
 
-  function flushMarkdown() {
-    if (mdBuffer.trim()) {
-      const sectionSource = `${source} [cells ${mdStartIdx}+]`;
-      chunks.push(...chunkMarkdown(mdBuffer, sectionSource));
-    }
-    mdBuffer = '';
-    mdStartIdx = -1;
+  function isHiddenTestCell(text: string): boolean {
+    return text.includes('BEGIN HIDDEN TESTS') || text.includes('END HIDDEN TESTS');
+  }
+
+  function flushCurrentSection(endIdx: number) {
+    const trimmed = sectionBuffer.trim();
+    if (!trimmed) return;
+    const tokens = [...new Set(tokenize(trimmed))];
+    const sectionSource = `${source} [cells ${startCellIdx}-${endIdx}]`;
+    chunks.push({
+      id: hashId(source, currentSectionTitle + `_${startCellIdx}`),
+      source: sectionSource,
+      title: currentSectionTitle,
+      content: trimmed,
+      tokens,
+    });
+    sectionBuffer = '';
+    startCellIdx = endIdx + 1;
   }
 
   for (let i = 0; i < notebook.cells.length; i++) {
     const cell = notebook.cells[i];
-    // Cell source can be a string or an array of strings
     const cellSource = Array.isArray(cell.source) ? cell.source.join('') : (cell.source || '');
     if (!cellSource.trim()) continue;
 
-    if (cell.cell_type === 'markdown') {
-      if (mdStartIdx < 0) mdStartIdx = i;
-      mdBuffer += cellSource + '\n\n';
-    } else if (cell.cell_type === 'code') {
-      // Flush any accumulated markdown before processing code
-      flushMarkdown();
-      const codeSource = `${source} [cell ${i}]`;
-      chunks.push(...chunkPython(cellSource, codeSource));
+    // Filter out hidden test assertions
+    if (isHiddenTestCell(cellSource)) continue;
+
+    const cellType = cell.cell_type;
+
+    if (cellType === 'markdown') {
+      const headingMatch = cellSource.match(/^##\s+(.+)$/m);
+      if (headingMatch) {
+        // Flush existing buffer when encountering a new section heading
+        if (sectionBuffer.trim()) {
+          flushCurrentSection(i - 1);
+        }
+        currentSectionTitle = headingMatch[1].trim();
+        sectionBuffer = cellSource + '\n\n';
+        startCellIdx = i;
+        continue;
+      }
+      sectionBuffer += cellSource + '\n\n';
+    } else if (cellType === 'code') {
+      sectionBuffer += `\`\`\`python\n${cellSource.trim()}\n\`\`\`\n\n`;
+    }
+
+    // Split if section exceeds maxWords to avoid oversized context
+    if (sectionBuffer.split(/\s+/).length > maxWords) {
+      flushCurrentSection(i);
     }
   }
 
-  // Flush remaining markdown
-  flushMarkdown();
+  // Flush remaining buffer
+  if (sectionBuffer.trim()) {
+    flushCurrentSection(notebook.cells.length - 1);
+  }
 
   return chunks;
 }
