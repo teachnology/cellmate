@@ -122,39 +122,73 @@ def chunk_python(content: str, source: str) -> List[RagChunk]:
         chunks.append(RagChunk(hash_id(source, title), source, title, content.strip(), tokens))
     return chunks
 
-def chunk_notebook(content: str, source: str) -> List[RagChunk]:
+def chunk_notebook(content: str, source: str, max_words: int = 600) -> List[RagChunk]:
+    """Parse a Jupyter Notebook (.ipynb) file and chunk by section headings (##).
+    Groups markdown explanations together with their associated code examples
+    into coherent, topic-level learning units.
+    Automatically filters out hidden test boilerplate cells.
+    """
     chunks = []
     try:
         nb = json.loads(content)
     except Exception:
         return chunks
     cells = nb.get('cells', [])
-    md_buf = ''
-    md_start_idx = -1
+    current_section_title = os.path.basename(source)
+    section_buffer = ''
+    start_cell_idx = 0
 
-    def flush_md():
-        nonlocal md_buf, md_start_idx
-        if md_buf.strip():
-            sec_source = f"{source} [cells {md_start_idx}+]"
-            chunks.extend(chunk_markdown(md_buf, sec_source))
-        md_buf = ''
-        md_start_idx = -1
+    def is_hidden_test_cell(text: str) -> bool:
+        return 'BEGIN HIDDEN TESTS' in text or 'END HIDDEN TESTS' in text
+
+    def flush_current_section(end_idx: int):
+        nonlocal section_buffer, start_cell_idx
+        trimmed = section_buffer.strip()
+        if not trimmed:
+            return
+        tokens = list(set(tokenize(trimmed)))
+        section_source = f"{source} [cells {start_cell_idx}-{end_idx}]"
+        chunks.append(RagChunk(
+            hash_id(source, f"{current_section_title}_{start_cell_idx}"),
+            section_source,
+            current_section_title,
+            trimmed,
+            tokens
+        ))
+        section_buffer = ''
+        start_cell_idx = end_idx + 1
 
     for i, cell in enumerate(cells):
         src = cell.get('source', '')
         cell_src = "".join(src) if isinstance(src, list) else src
         if not cell_src.strip():
             continue
+
+        # Filter out hidden test assertions
+        if is_hidden_test_cell(cell_src):
+            continue
+
         cell_type = cell.get('cell_type', '')
+
         if cell_type == 'markdown':
-            if md_start_idx < 0:
-                md_start_idx = i
-            md_buf += cell_src + '\n\n'
+            heading_match = re.search(r'^##\s+(.+)$', cell_src, re.MULTILINE)
+            if heading_match:
+                if section_buffer.strip():
+                    flush_current_section(i - 1)
+                current_section_title = heading_match.group(1).strip()
+                section_buffer = cell_src + '\n\n'
+                start_cell_idx = i
+                continue
+            section_buffer += cell_src + '\n\n'
         elif cell_type == 'code':
-            flush_md()
-            code_source = f"{source} [cell {i}]"
-            chunks.extend(chunk_python(cell_src, code_source))
-    flush_md()
+            section_buffer += f"```python\n{cell_src.strip()}\n```\n\n"
+
+        if len(section_buffer.split()) > max_words:
+            flush_current_section(i)
+
+    if section_buffer.strip():
+        flush_current_section(len(cells) - 1)
+
     return chunks
 
 def load_knowledge_base(knowledge_dir: str) -> List[RagChunk]:
