@@ -1,0 +1,366 @@
+{
+  "summary": {
+    "Pre-study Guide": {
+      "BM25-lite (Keyword)": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.5167,
+        "context_recall": 0.5,
+        "context_precision": 0.3148
+      },
+      "Dense Embedding (ChromaDB)": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.4,
+        "context_recall": 0.5,
+        "context_precision": 0.2593
+      },
+      "Hybrid (BM25 + Dense RRF)": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.255,
+        "context_recall": 0.2222,
+        "context_precision": 0.1852
+      }
+    },
+    "AI Feedback": {
+      "BM25-lite (Keyword)": {
+        "faithfulness": 0.0519,
+        "answer_relevancy": 0.7683,
+        "context_recall": 0.5,
+        "context_precision": 0.3333
+      },
+      "Dense Embedding (ChromaDB)": {
+        "faithfulness": 0.175,
+        "answer_relevancy": 0.7083,
+        "context_recall": 0.5,
+        "context_precision": 0.3889
+      },
+      "Hybrid (BM25 + Dense RRF)": {
+        "faithfulness": 0.0833,
+        "answer_relevancy": 0.7167,
+        "context_recall": 0.5556,
+        "context_precision": 0.3333
+      }
+    }
+  },
+  "detailed": [
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.55,
+      "context_recall": 0.6666666666666666,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.55,
+      "context_recall": 0.3333333333333333,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.55,
+      "context_recall": 0.6666666666666666,
+      "context_precision": 0.3333333333
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.6,
+      "context_recall": 0.0,
+      "context_precision": 0.0
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.5,
+      "context_recall": 1.0,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.35,
+      "context_recall": 0.3333333333333333,
+      "context_precision": 0.5555556
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.5,
+      "context_recall": 0.6666666666666666,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.5,
+      "context_recall": 0.3333333333333333,
+      "context_precision": 0.3333333333
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.45,
+      "context_recall": 1.0,
+      "context_precision": 0.3333333333
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.5,
+      "context_recall": 1.0,
+      "context_precision": 0.5555556
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.45,
+      "context_recall": 0.0,
+      "context_precision": 0.0
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.78,
+      "context_recall": 0.0,
+      "context_precision": 0.1111111111
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.25,
+      "context_recall": 1.0,
+      "context_precision": 0.3333333333
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.5,
+      "context_recall": 0.3333333333,
+      "context_precision": 0.6667
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.55,
+      "context_recall": 0.6666666666666666,
+      "context_precision": 0.3333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 0.1111111111111111,
+      "answer_relevancy": 0.86,
+      "context_recall": 0.0,
+      "context_precision": 0.3333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.55,
+      "context_recall": 1.0,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 0.2,
+      "answer_relevancy": 0.9,
+      "context_recall": 0.0,
+      "context_precision": 0.1111111111
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.9,
+      "context_recall": 1.0,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.85,
+      "context_recall": 0.3333333333,
+      "context_precision": 0.5555556
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.85,
+      "context_recall": 0.6666666666666666,
+      "context_precision": 0.6666666667
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 0.25,
+      "answer_relevancy": 0.85,
+      "context_recall": 0.0,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.55,
+      "context_recall": 0.6666666666666666,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 0.8,
+      "answer_relevancy": 0.9,
+      "context_recall": 0.3333333333333333,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.55,
+      "context_recall": 1.0,
+      "context_precision": 0.3333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.55,
+      "context_recall": 0.3333333333333333,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.2,
+      "context_recall": 0.6666666667,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.9,
+      "context_recall": 0.3333333333333333,
+      "context_precision": 0.3333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.55,
+      "context_recall": 0.6666666666666666,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.95,
+      "context_recall": 0.3333333333333333,
+      "context_precision": 0.3333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 0.5,
+      "answer_relevancy": 0.85,
+      "context_recall": 1.0,
+      "context_precision": 0.3333333333333333
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.85,
+      "context_recall": 0.3333333333333333,
+      "context_precision": 0.3333333333
+    }
+  ]
+}
