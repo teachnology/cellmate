@@ -208,6 +208,18 @@ def load_knowledge_base(knowledge_dir: str) -> List[RagChunk]:
                     chunks.extend(chunk_markdown(fp.read(), rel_path))
     return chunks
 
+def filter_teaching_chunks(chunks: List[RagChunk]) -> List[RagChunk]:
+    """Filter out Exercise description chunks, keeping only teaching content.
+    
+    Exercise chunks (titled 'Exercise X.Y: ...') contain only the problem
+    statement and empty code scaffolding — no teaching value for Pre-study
+    Guide generation. Removing them forces retrieval to surface the actual
+    lecture explanation chunks (e.g. 'The while loop', 'Lists', etc.)
+    """
+    import re
+    exercise_pattern = re.compile(r'^Exercise\s+\d', re.IGNORECASE)
+    return [c for c in chunks if not exercise_pattern.match(c.title)]
+
 # ---------------------------------------------------------------------------
 # 3. Retrieval Engines
 # ---------------------------------------------------------------------------
