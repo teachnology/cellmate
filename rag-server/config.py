@@ -22,8 +22,28 @@ print(f"[config] Loading embedding model: {EMBEDDING_MODEL} ...")
 model = SentenceTransformer(EMBEDDING_MODEL)
 print("[config] Embedding model loaded.")
 
-chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-collection = chroma_client.get_or_create_collection(
-    name=COLLECTION_NAME,
-    metadata={"hnsw:space": "cosine"},
-)
+import shutil
+
+def init_chroma():
+    global chroma_client
+    chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+    try:
+        return chroma_client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"},
+        )
+    except Exception as e:
+        print(f"[config] ChromaDB schema incompatibility detected ({e}). Resetting chroma_data...")
+        try:
+            if os.path.exists(CHROMA_PERSIST_DIR):
+                shutil.rmtree(CHROMA_PERSIST_DIR, ignore_errors=True)
+            os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
+        except Exception:
+            pass
+        chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+        return chroma_client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+collection = init_chroma()

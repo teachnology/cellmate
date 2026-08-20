@@ -46,6 +46,7 @@ class IndexResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     top_k: int = 3
+    filter_exercises: bool = False
 class QueryResult(BaseModel):
     source: str
     title: str
@@ -100,25 +101,36 @@ def index_chunks(req: IndexRequest):
 @app.post("/query", response_model=QueryResponse)
 def query_chunks(req: QueryRequest):
     """Accept a query string, embed it, return top-K similar chunks."""
+    import re
     if collection.count() == 0:
         return QueryResponse(results=[])
     query_embedding = model.encode([req.query], show_progress_bar=False).tolist()
+    
+    # If filtering exercises, query more chunks so we have enough after filtering
+    fetch_k = min(req.top_k * 4 if req.filter_exercises else req.top_k, collection.count())
     results = collection.query(
         query_embeddings=query_embedding,
-        n_results=min(req.top_k, collection.count()),
+        n_results=fetch_k,
         include=["documents", "metadatas", "distances"],
     )
     query_results: list[QueryResult] = []
+    exercise_pattern = re.compile(r'^Exercise\s+\d', re.IGNORECASE)
+
     if results and results["ids"] and results["ids"][0]:
         for i in range(len(results["ids"][0])):
+            title = results["metadatas"][0][i].get("title", "")
+            if req.filter_exercises and exercise_pattern.match(title):
+                continue
             distance = results["distances"][0][i] if results["distances"] else 0
             similarity = 1.0 - distance
             query_results.append(QueryResult(
                 source=results["metadatas"][0][i].get("source", ""),
-                title=results["metadatas"][0][i].get("title", ""),
+                title=title,
                 content=results["documents"][0][i] if results["documents"] else "",
                 score=round(similarity, 4),
             ))
+            if len(query_results) >= req.top_k:
+                break
     return QueryResponse(results=query_results)
 
 # ---------------------------------------------------------------------------
