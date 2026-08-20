@@ -40,7 +40,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 from evaluate_rag import (
     RagChunk, load_knowledge_base, load_benchmark_queries,
-    bm25_lite_retrieve, dense_retrieve, hybrid_rrf_retrieve
+    bm25_lite_retrieve, dense_retrieve, hybrid_rrf_retrieve,
+    filter_teaching_chunks
 )
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,11 @@ def call_llm(
 ) -> str:
     """Call LLM API — auto-detects Ollama vs OpenAI format."""
     is_ollama = '/api/generate' in api_url or '/api/chat' in api_url
+    
+    # Auto-append /chat/completions for OpenAI compatible endpoints if missing
+    if not is_ollama and not api_url.endswith("/chat/completions"):
+        api_url = api_url.rstrip("/") + "/chat/completions"
+        
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
@@ -377,13 +383,25 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
     chunks = load_knowledge_base(knowledge_dir)
     print(f"  → {len(chunks)} chunks loaded")
 
+    # Pre-compute teaching-only chunks (exclude Exercise descriptions)
+    teaching_chunks = filter_teaching_chunks(chunks)
+    print(f"  → {len(teaching_chunks)} teaching chunks (after filtering {len(chunks) - len(teaching_chunks)} exercise chunks)")
+
     from sentence_transformers import SentenceTransformer
     print("[2/5] Loading embedding model...")
     emb_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+    # Embeddings for all chunks (used by AI Feedback scenario)
     chunk_texts = [f"{c.title}\n{c.content}" for c in chunks]
     chunk_embs = emb_model.encode(chunk_texts, show_progress_bar=False, normalize_embeddings=True)
     for i, c in enumerate(chunks):
         c.embedding = chunk_embs[i]
+
+    # Embeddings for teaching chunks only (used by Pre-study scenario)
+    teach_texts = [f"{c.title}\n{c.content}" for c in teaching_chunks]
+    teach_embs = emb_model.encode(teach_texts, show_progress_bar=False, normalize_embeddings=True)
+    for i, c in enumerate(teaching_chunks):
+        c.embedding = teach_embs[i]
 
     # 2. Load benchmark queries
     print("[3/5] Loading benchmark queries...")
@@ -395,27 +413,35 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
         all_queries = random.sample(all_queries, sample_size)
     print(f"  → {len(all_queries)} exercises to evaluate")
 
-    # 3. Define retrieval engines to evaluate
-    engines = {
-        "BM25-lite (Keyword)": lambda query: bm25_lite_retrieve(query, chunks, top_k=3),
-        "Dense Embedding (ChromaDB)": lambda query: dense_retrieve(
-            emb_model.encode([query], normalize_embeddings=True)[0],
-            chunks, chunk_embs, top_k=3
-        ),
-        "Hybrid (BM25 + Dense RRF)": lambda query: hybrid_rrf_retrieve(
-            bm25_lite_retrieve(query, chunks, top_k=10),
-            dense_retrieve(
+    # 3. Define retrieval engines — scenario-dependent
+    #    Pre-study: uses teaching_chunks (exercise descriptions filtered out), top_k=5
+    #    AI Feedback: uses all chunks (exercise context may help), top_k=5
+    TOP_K = 5
+
+    def make_engines(use_chunks, use_embs):
+        return {
+            "BM25-lite (Keyword)": lambda query, _c=use_chunks: bm25_lite_retrieve(query, _c, top_k=TOP_K),
+            "Dense Embedding (ChromaDB)": lambda query, _c=use_chunks, _e=use_embs: dense_retrieve(
                 emb_model.encode([query], normalize_embeddings=True)[0],
-                chunks, chunk_embs, top_k=10
+                _c, _e, top_k=TOP_K
             ),
-            k=60, top_k=3
-        ),
-    }
+            "Hybrid (BM25 + Dense RRF)": lambda query, _c=use_chunks, _e=use_embs: hybrid_rrf_retrieve(
+                bm25_lite_retrieve(query, _c, top_k=10),
+                dense_retrieve(
+                    emb_model.encode([query], normalize_embeddings=True)[0],
+                    _c, _e, top_k=10
+                ),
+                k=60, top_k=TOP_K
+            ),
+        }
+
+    prestudy_engines = make_engines(teaching_chunks, teach_embs)
+    feedback_engines = make_engines(chunks, chunk_embs)
 
     # 4. Evaluate each engine across both scenarios
     scenarios = [
-        ("Pre-study Guide", "query_prestudy", PRESTUDY_TEMPLATE),
-        ("AI Feedback", "query_code", FEEDBACK_TEMPLATE),
+        ("Pre-study Guide", "query_prestudy", PRESTUDY_TEMPLATE, prestudy_engines),
+        ("AI Feedback", "query_code", FEEDBACK_TEMPLATE, feedback_engines),
     ]
 
     all_results = {}
@@ -423,7 +449,7 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
 
     print("[4/5] Running RAGAs evaluation (this takes several minutes)...\n")
 
-    for scenario_name, query_key, answer_template in scenarios:
+    for scenario_name, query_key, answer_template, engines in scenarios:
         print(f"━━━ Scenario: {scenario_name} ━━━")
         all_results[scenario_name] = {}
 
@@ -444,6 +470,11 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                 concepts = EXERCISE_CONCEPTS.get(ex_id, ["programming concepts", "Python syntax", "problem solving"])
 
                 t_exercise = time.time()
+
+                # Query enhancement: append concept keywords for Pre-study
+                if scenario_name == "Pre-study Guide":
+                    query_text = f"{query_text}\nKey concepts: {', '.join(concepts)}"
+
                 print(f"    [{idx+1}/{len(all_queries)}] {ex_id}...", end="", flush=True)
 
                 # A. Retrieve context
