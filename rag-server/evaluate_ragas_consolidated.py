@@ -285,3 +285,263 @@ def safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+# ---------------------------------------------------------------------------
+# Main RAGAs Evaluation
+# ---------------------------------------------------------------------------
+
+def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: int = 0):
+    """Run full RAGAs evaluation across all retrieval engines."""
+    repo_path = '/Users/zq425/Desktop/promptfolio'
+    if not os.path.exists(repo_path):
+        repo_path = '/tmp/promptfolio_repo'
+    knowledge_dir = os.path.join(repo_path, 'knowledge')
+
+    print("=" * 70)
+    print("CellMate RAGAs: LLM-as-a-Judge Evaluation")
+    print(f"Model: {model}")
+    print(f"API: {api_url}")
+    print("=" * 70)
+
+    # 1. Load knowledge base and embeddings
+    print("\n[1/5] Loading knowledge base...")
+    chunks = load_knowledge_base(knowledge_dir)
+    print(f"  → {len(chunks)} chunks loaded")
+
+    # Pre-compute teaching-only chunks (exclude Exercise descriptions)
+    teaching_chunks = filter_teaching_chunks(chunks)
+    print(f"  → {len(teaching_chunks)} teaching chunks (after filtering {len(chunks) - len(teaching_chunks)} exercise chunks)")
+
+    from sentence_transformers import SentenceTransformer
+    print("[2/5] Loading embedding model...")
+    emb_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+    # Embeddings for all chunks (used by AI Feedback scenario)
+    chunk_texts = [f"{c.title}\n{c.content}" for c in chunks]
+    chunk_embs = emb_model.encode(chunk_texts, show_progress_bar=False, normalize_embeddings=True)
+    for i, c in enumerate(chunks):
+        c.embedding = chunk_embs[i]
+
+    # Embeddings for teaching chunks only (used by Pre-study scenario)
+    teach_texts = [f"{c.title}\n{c.content}" for c in teaching_chunks]
+    teach_embs = emb_model.encode(teach_texts, show_progress_bar=False, normalize_embeddings=True)
+    for i, c in enumerate(teaching_chunks):
+        c.embedding = teach_embs[i]
+
+    # 2. Load benchmark queries
+    print("[3/5] Loading benchmark queries...")
+    all_queries = load_benchmark_queries(repo_path)
+    if sample_size > 0 and sample_size < len(all_queries):
+        # Deterministic sampling across all lecture prefixes
+        import random
+        random.seed(42)
+        all_queries = random.sample(all_queries, sample_size)
+    print(f"  → {len(all_queries)} exercises to evaluate")
+
+    # 3. Define retrieval engines — scenario-dependent
+    #    Pre-study: uses teaching_chunks (exercise descriptions filtered out), top_k=5
+    #    AI Feedback: uses all chunks (exercise context may help), top_k=5
+    TOP_K = 5
+
+    def make_engines(use_chunks, use_embs):
+        return {
+            "BM25-lite (Keyword)": lambda query, _c=use_chunks: bm25_lite_retrieve(query, _c, top_k=TOP_K),
+            "Dense Embedding (ChromaDB)": lambda query, _c=use_chunks, _e=use_embs: dense_retrieve(
+                emb_model.encode([query], normalize_embeddings=True)[0],
+                _c, _e, top_k=TOP_K
+            ),
+            "Hybrid (BM25 + Dense RRF)": lambda query, _c=use_chunks, _e=use_embs: hybrid_rrf_retrieve(
+                bm25_lite_retrieve(query, _c, top_k=10),
+                dense_retrieve(
+                    emb_model.encode([query], normalize_embeddings=True)[0],
+                    _c, _e, top_k=10
+                ),
+                k=60, top_k=TOP_K
+            ),
+        }
+
+    prestudy_engines = make_engines(teaching_chunks, teach_embs)
+    feedback_engines = make_engines(chunks, chunk_embs)
+
+    # 4. Evaluate each engine across both scenarios
+    scenarios = [
+        ("Pre-study Guide", "query_prestudy", PRESTUDY_TEMPLATE, prestudy_engines),
+        ("AI Feedback", "query_code", FEEDBACK_TEMPLATE, feedback_engines),
+    ]
+
+    all_results = {}
+    detailed_records = []
+
+    print("[4/5] Running RAGAs evaluation (this takes several minutes)...\n")
+
+    for scenario_name, query_key, answer_template, engines in scenarios:
+        print(f"━━━ Scenario: {scenario_name} ━━━")
+        all_results[scenario_name] = {}
+
+        for engine_name, retrieve_fn in engines.items():
+            print(f"\n  Engine: {engine_name}")
+            metrics = {
+                "faithfulness": [],
+                "answer_relevancy": [],
+                "context_recall": [],
+                "context_precision": [],
+            }
+
+            for idx, q in enumerate(all_queries):
+                ex_id = q['id']
+                query_text = q[query_key]
+                title = q['title']
+                desc = q['desc']
+                concepts = EXERCISE_CONCEPTS.get(ex_id, ["programming concepts", "Python syntax", "problem solving"])
+
+                t_exercise = time.time()
+
+                # Query enhancement: append concept keywords for Pre-study
+                if scenario_name == "Pre-study Guide":
+                    query_text = f"{query_text}\nKey concepts: {', '.join(concepts)}"
+
+                print(f"    [{idx+1}/{len(all_queries)}] {ex_id}...", end="", flush=True)
+
+                # A. Retrieve context
+                retrieved = retrieve_fn(query_text)
+                context_str = "\n\n---\n\n".join(
+                    [f"### {c.title}\n*(Source: {c.source})*\n\n{c.content}" for c, _ in retrieved]
+                )
+
+                if not context_str.strip():
+                    print(" (no context) skip")
+                    for k in metrics:
+                        metrics[k].append(0.0)
+                    continue
+
+                # B. Generate answer using the RAG prompt
+                if scenario_name == "Pre-study Guide":
+                    gen_prompt = answer_template.format(
+                        exercise_id=ex_id,
+                        title=title,
+                        description=desc,
+                        rag_context=context_str,
+                    )
+                else:
+                    # Simulated student code for feedback scenario
+                    student_code = f"# EXERCISE_ID: {ex_id}\ndef {ex_id.split('_', 2)[-1]}():\n    pass  # TODO"
+                    test_analysis = "3 tests, 0 passed, 3 failed (0%)\nFailing: test_basic, test_edge, test_negative"
+                    gen_prompt = answer_template.format(
+                        description=desc,
+                        student_code=student_code,
+                        test_analysis=test_analysis,
+                        rag_context=context_str,
+                    )
+
+                answer = call_llm(gen_prompt, api_url, api_key, model, temperature=0.0, max_tokens=800)
+                if not answer:
+                    print(" (LLM error) skip")
+                    for k in metrics:
+                        metrics[k].append(0.0)
+                    continue
+
+                # C. Unified RAGAs Evaluation (Single LLM Call for All 4 Metrics)
+                chunks_with_ranks = "\n".join([
+                    f"**Rank {i+1}:** [{c.title}] (Source: {c.source})\n{c.content[:300]}..."
+                    for i, (c, _) in enumerate(retrieved)
+                ])
+                judge_prompt = RAGAS_COMBINED_JUDGE_PROMPT.format(
+                    exercise_id=ex_id,
+                    title=title,
+                    description=desc[:400],
+                    concepts=", ".join(concepts),
+                    chunks_with_ranks=chunks_with_ranks,
+                    question=query_text[:600],
+                    answer=answer[:2000],
+                )
+                judge_resp = call_llm(judge_prompt, api_url, api_key, model, temperature=0.0, max_tokens=300)
+                judge_data = parse_llm_json(judge_resp)
+
+                faith_score = safe_float(judge_data.get("faithfulness", 0.0))
+                rel_score = safe_float(judge_data.get("answer_relevancy", 0.0))
+                recall_score = safe_float(judge_data.get("context_recall", 0.0))
+                prec_score = safe_float(judge_data.get("context_precision", 0.0))
+
+                metrics["faithfulness"].append(faith_score)
+                metrics["answer_relevancy"].append(rel_score)
+                metrics["context_recall"].append(recall_score)
+                metrics["context_precision"].append(prec_score)
+
+                elapsed = time.time() - t_exercise
+                print(f" F={faith_score:.2f} R={rel_score:.2f} CR={recall_score:.2f} CP={prec_score:.2f} ({elapsed:.1f}s)", flush=True)
+
+                detailed_records.append({
+                    "scenario": scenario_name,
+                    "engine": engine_name,
+                    "exercise_id": ex_id,
+                    "title": title,
+                    "faithfulness": faith_score,
+                    "answer_relevancy": rel_score,
+                    "context_recall": recall_score,
+                    "context_precision": prec_score,
+                    "answer_preview": answer[:200],
+                    "context_titles": [c.title for c, _ in retrieved],
+                    "elapsed_seconds": round(elapsed, 1),
+                })
+
+                # Rate limiting: small delay between exercises
+                time.sleep(0.5)
+
+            # Aggregate metrics for this engine
+            agg = {}
+            for k, values in metrics.items():
+                agg[k] = round(np.mean(values), 4) if values else 0.0
+            all_results[scenario_name][engine_name] = agg
+            print(f"\n  ► {engine_name} averages: "
+                  f"Faith={agg['faithfulness']:.4f}  "
+                  f"Rel={agg['answer_relevancy']:.4f}  "
+                  f"Recall={agg['context_recall']:.4f}  "
+                  f"Prec={agg['context_precision']:.4f}", flush=True)
+
+    # 5. Print final summary table
+    print("\n" + "=" * 90)
+    print("RAGAs EVALUATION SUMMARY — LLM-as-a-Judge")
+    print("=" * 90)
+
+    for scenario_name in all_results:
+        print(f"\n### {scenario_name} (N = {len(all_queries)} exercises)")
+        print("-" * 90)
+        print(f"{'Retrieval Engine':<30} | {'Faithfulness':<13} | {'Answer Rel.':<13} | {'Context Rec.':<13} | {'Context Prec.':<13}")
+        print("-" * 90)
+        for engine_name in all_results[scenario_name]:
+            m = all_results[scenario_name][engine_name]
+            print(f"{engine_name:<30} | {m['faithfulness']:>11.4f} | {m['answer_relevancy']:>11.4f} | {m['context_recall']:>11.4f} | {m['context_precision']:>11.4f}")
+
+    # Save results
+    output_dir = os.path.dirname(__file__)
+    summary_path = os.path.join(output_dir, "ragas_eval_consolidated.json")
+    with open(summary_path, "w") as f:
+        json.dump({"summary": all_results, "detailed": detailed_records}, f, indent=2)
+    print(f"\nResults saved to {summary_path}")
+
+    return all_results, detailed_records
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="CellMate RAGAs LLM-as-a-Judge Evaluation")
+    parser.add_argument("--api-url", type=str,
+                        default=os.environ.get("CELLMATE_API_URL", ""),
+                        help="LLM API endpoint (OpenAI-compatible /chat/completions)")
+    parser.add_argument("--api-key", type=str,
+                        default=os.environ.get("CELLMATE_API_KEY", ""),
+                        help="API key")
+    parser.add_argument("--model", type=str,
+                        default=os.environ.get("CELLMATE_MODEL", "gpt-oss:120b"),
+                        help="Model name")
+    parser.add_argument("--sample", type=int, default=0,
+                        help="Number of exercises to sample (0 = all 36)")
+    args = parser.parse_args()
+
+    if not args.api_url or not args.api_key:
+        print("Error: --api-url and --api-key are required.")
+        print("  Or set CELLMATE_API_URL and CELLMATE_API_KEY environment variables.")
+        sys.exit(1)
+
+    run_ragas_evaluation(args.api_url, args.api_key, args.model, args.sample)
