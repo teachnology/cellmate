@@ -445,15 +445,24 @@ export function retrieveContext(
   query: string,
   index: RagChunk[],
   topK: number = 3,
-  queryEmbedding?: number[]
+  queryEmbedding?: number[],
+  excludeExercises: boolean = false
 ): string {
   if (index.length === 0) return '';
+
+  let pool = index;
+  if (excludeExercises) {
+    const filtered = index.filter(c => !/^Exercise\s+\d/i.test(c.title));
+    if (filtered.length > 0) {
+      pool = filtered;
+    }
+  }
 
   let scored: { chunk: RagChunk; score: number }[];
 
   // Semantic mode: cosine similarity
-  if (queryEmbedding && queryEmbedding.length > 0 && index[0]?.embedding && index[0].embedding.length > 0) {
-    scored = index
+  if (queryEmbedding && queryEmbedding.length > 0 && pool[0]?.embedding && pool[0].embedding.length > 0) {
+    scored = pool
       .filter(c => c.embedding && c.embedding.length > 0)
       .map(chunk => ({
         chunk,
@@ -464,20 +473,20 @@ export function retrieveContext(
     const queryTokens = [...new Set(tokenize(query))];
     if (queryTokens.length === 0) return '';
 
-    const N = index.length;
+    const N = pool.length;
 
     // Pre-compute document frequency for each query token
     const df = new Map<string, number>();
     for (const token of queryTokens) {
       let count = 0;
-      for (const chunk of index) {
+      for (const chunk of pool) {
         if (chunk.tokens.includes(token)) count++;
       }
       df.set(token, count);
     }
 
     // Score each chunk
-    scored = index.map(chunk => {
+    scored = pool.map(chunk => {
       let score = 0;
       const chunkTokenSet = new Set(chunk.tokens);
       for (const token of queryTokens) {
@@ -541,15 +550,22 @@ export async function indexToChromaDB(repoPath: string, serverUrl: string): Prom
   });
   return resp.data.indexed || 0;
 }
+
 /**
  * Query the ChromaDB backend for relevant course materials.
  * Returns formatted context string matching the output format of retrieveContext().
  */
-export async function queryChromaDB(query: string, serverUrl: string, topK: number = 3): Promise<string> {
+export async function queryChromaDB(
+  query: string,
+  serverUrl: string,
+  topK: number = 3,
+  excludeExercises: boolean = false
+): Promise<string> {
   const url = serverUrl.replace(/\/$/, '');
   const resp = await axios.post(`${url}/query`, {
     query: query.substring(0, 2000),  // truncate long queries
     top_k: topK,
+    filter_exercises: excludeExercises,
   }, {
     headers: { 'Content-Type': 'application/json' },
     timeout: 30000,
