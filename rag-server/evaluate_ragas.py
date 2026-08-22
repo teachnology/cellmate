@@ -342,14 +342,20 @@ def parse_llm_json(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Try to find JSON object in text
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
-        return {"score": 0.0, "error": "Failed to parse LLM response"}
+        pass
+    # Balanced-brace JSON extraction: find the first valid JSON object
+    for i, ch in enumerate(text):
+        if ch == '{':
+            depth = 0
+            for j in range(i, len(text)):
+                if text[j] == '{': depth += 1
+                elif text[j] == '}': depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[i:j+1])
+                    except json.JSONDecodeError:
+                        break
+    return {"score": 0.0, "error": "Failed to parse LLM response"}
 
 
 def safe_float(value, default: float = 0.0) -> float:
@@ -485,9 +491,7 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
 
                 if not context_str.strip():
                     print(" (no context) skip")
-                    for k in metrics:
-                        metrics[k].append(0.0)
-                    continue
+                    continue  # Don't append 0.0 — exclude from mean
 
                 # B. Generate answer using the RAG prompt
                 if scenario_name == "Pre-study Guide":
@@ -511,9 +515,7 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                 answer = call_llm(gen_prompt, api_url, api_key, model, temperature=0.0, max_tokens=800)
                 if not answer:
                     print(" (LLM error) skip")
-                    for k in metrics:
-                        metrics[k].append(0.0)
-                    continue
+                    continue  # Don't append 0.0 — exclude from mean
 
                 # C. Evaluate Faithfulness
                 faith_prompt = FAITHFULNESS_PROMPT.format(
@@ -523,7 +525,13 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                 )
                 faith_resp = call_llm(faith_prompt, api_url, api_key, model, temperature=0.0)
                 faith_data = parse_llm_json(faith_resp)
-                faith_score = safe_float(faith_data.get("score", 0.0))
+                # Self-verify: compute score from claims array if available
+                claims = faith_data.get("claims", [])
+                if claims and isinstance(claims, list):
+                    supported = sum(1 for c in claims if c.get("supported"))
+                    faith_score = supported / len(claims)
+                else:
+                    faith_score = safe_float(faith_data.get("score", 0.0))
                 metrics["faithfulness"].append(faith_score)
 
                 # D. Evaluate Answer Relevancy
@@ -546,7 +554,13 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                 )
                 recall_resp = call_llm(recall_prompt, api_url, api_key, model, temperature=0.0)
                 recall_data = parse_llm_json(recall_resp)
-                recall_score = safe_float(recall_data.get("score", 0.0))
+                # Self-verify: compute score from concepts array if available
+                concept_items = recall_data.get("concepts", [])
+                if concept_items and isinstance(concept_items, list):
+                    covered = sum(1 for c in concept_items if c.get("covered"))
+                    recall_score = covered / len(concept_items)
+                else:
+                    recall_score = safe_float(recall_data.get("score", 0.0))
                 metrics["context_recall"].append(recall_score)
 
                 # F. Evaluate Context Precision
@@ -585,12 +599,13 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                 # Rate limiting: small delay between exercises
                 time.sleep(0.5)
 
-            # Aggregate metrics for this engine
             agg = {}
             for k, values in metrics.items():
-                agg[k] = round(np.mean(values), 4) if values else 0.0
+                agg[k] = round(np.mean(values), 4) if values else float('nan')
             all_results[scenario_name][engine_name] = agg
-            print(f"\n  ► {engine_name} averages: "
+            evaluated_count = len(metrics['faithfulness'])
+            skipped_count = len(all_queries) - evaluated_count
+            print(f"\n  ► {engine_name} averages ({evaluated_count} evaluated, {skipped_count} skipped): "
                   f"Faith={agg['faithfulness']:.4f}  "
                   f"Rel={agg['answer_relevancy']:.4f}  "
                   f"Recall={agg['context_recall']:.4f}  "

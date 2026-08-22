@@ -266,14 +266,20 @@ def parse_llm_json(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Try to find JSON object in text
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
-        return {"score": 0.0, "error": "Failed to parse LLM response"}
+        pass
+    # Balanced-brace JSON extraction: find the first valid JSON object
+    for i, ch in enumerate(text):
+        if ch == '{':
+            depth = 0
+            for j in range(i, len(text)):
+                if text[j] == '{': depth += 1
+                elif text[j] == '}': depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[i:j+1])
+                    except json.JSONDecodeError:
+                        break
+    return {"score": 0.0, "error": "Failed to parse LLM response"}
 
 
 def safe_float(value, default: float = 0.0) -> float:
@@ -409,9 +415,7 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
 
                 if not context_str.strip():
                     print(" (no context) skip")
-                    for k in metrics:
-                        metrics[k].append(0.0)
-                    continue
+                    continue  # Don't append 0.0 — exclude from mean
 
                 # B. Generate answer using the RAG prompt
                 if scenario_name == "Pre-study Guide":
@@ -435,9 +439,7 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                 answer = call_llm(gen_prompt, api_url, api_key, model, temperature=0.0, max_tokens=800)
                 if not answer:
                     print(" (LLM error) skip")
-                    for k in metrics:
-                        metrics[k].append(0.0)
-                    continue
+                    continue  # Don't append 0.0 — exclude from mean
 
                 # C. Unified RAGAs Evaluation (Single LLM Call for All 4 Metrics)
                 chunks_with_ranks = "\n".join([
@@ -453,7 +455,7 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                     question=query_text[:600],
                     answer=answer[:2000],
                 )
-                judge_resp = call_llm(judge_prompt, api_url, api_key, model, temperature=0.0, max_tokens=300)
+                judge_resp = call_llm(judge_prompt, api_url, api_key, model, temperature=0.0, max_tokens=800)
                 judge_data = parse_llm_json(judge_resp)
 
                 faith_score = safe_float(judge_data.get("faithfulness", 0.0))
@@ -489,9 +491,11 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
             # Aggregate metrics for this engine
             agg = {}
             for k, values in metrics.items():
-                agg[k] = round(np.mean(values), 4) if values else 0.0
+                agg[k] = round(np.mean(values), 4) if values else float('nan')
             all_results[scenario_name][engine_name] = agg
-            print(f"\n  ► {engine_name} averages: "
+            evaluated_count = len(metrics['faithfulness'])
+            skipped_count = len(all_queries) - evaluated_count
+            print(f"\n  ► {engine_name} averages ({evaluated_count} evaluated, {skipped_count} skipped): "
                   f"Faith={agg['faithfulness']:.4f}  "
                   f"Rel={agg['answer_relevancy']:.4f}  "
                   f"Recall={agg['context_recall']:.4f}  "
