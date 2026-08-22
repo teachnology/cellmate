@@ -105,111 +105,35 @@ def call_llm(
 
 
 # ---------------------------------------------------------------------------
-# RAGAs Metric Prompts (LLM-as-a-Judge)
+# RAGAs Consolidated Metric Prompt (LLM-as-a-Judge)
 # ---------------------------------------------------------------------------
 
-FAITHFULNESS_PROMPT = textwrap.dedent("""\
-You are evaluating the faithfulness of an AI-generated answer.
+RAGAS_COMBINED_JUDGE_PROMPT = textwrap.dedent("""\
+You are an expert academic evaluator performing RAGAs evaluation on an AI programming tutor.
 
-Faithfulness measures whether ALL claims in the answer can be verified from the provided context. 
-An answer is faithful if every factual statement it makes is supported by information in the context.
-
-## Context (Retrieved Knowledge Chunks)
-{context}
-
-## Question
-{question}
-
-## AI-Generated Answer
-{answer}
-
-## Task
-1. Extract each factual claim / statement from the AI answer.
-2. For each claim, determine if it is supported by the context (YES/NO).
-3. Compute: faithfulness_score = (number of supported claims) / (total claims)
-
-Respond ONLY with a JSON object in this exact format (no markdown, no extra text):
-{{"claims": [{{"claim": "...", "supported": true/false}}, ...], "score": <float 0.0-1.0>}}
-""")
-
-ANSWER_RELEVANCY_PROMPT = textwrap.dedent("""\
-You are evaluating the relevancy of an AI-generated answer to the original question.
-
-Answer Relevancy measures how well the answer addresses what was asked.
-A highly relevant answer directly addresses the question with appropriate detail.
-An irrelevant answer is off-topic, too vague, or answers a different question.
-
-## Question
-{question}
-
-## AI-Generated Answer
-{answer}
-
-## Task
-Rate the answer's relevancy on a 0.0 to 1.0 scale:
-- 1.0: Perfectly relevant, directly addresses every aspect of the question
-- 0.7-0.9: Mostly relevant, addresses the core question with minor tangents
-- 0.4-0.6: Partially relevant, addresses some aspects but misses key parts
-- 0.1-0.3: Marginally relevant, mostly off-topic
-- 0.0: Completely irrelevant
-
-Respond ONLY with a JSON object (no markdown, no extra text):
-{{"reasoning": "brief explanation", "score": <float 0.0-1.0>}}
-""")
-
-CONTEXT_RECALL_PROMPT = textwrap.dedent("""\
-You are evaluating the recall of retrieved context for a programming exercise.
-
-Context Recall measures whether the retrieved context contains ALL the information 
-needed to correctly guide a student on this exercise.
-
-## Exercise Information (Ground Truth)
+## Exercise Information
 - Exercise ID: {exercise_id}
 - Title: {title}
 - Description: {description}
 - Key concepts needed: {concepts}
 
-## Retrieved Context (Top-K Chunks)
-{context}
-
-## Task
-Determine what fraction of the essential concepts / information needed for this 
-exercise is present in the retrieved context.
-
-For each key concept needed:
-1. List the concept
-2. Determine if it is covered in the retrieved context (YES/NO)
-3. Compute: recall = (concepts covered) / (total concepts needed)
-
-Respond ONLY with a JSON object (no markdown, no extra text):
-{{"concepts": [{{"concept": "...", "covered": true/false}}, ...], "score": <float 0.0-1.0>}}
-""")
-
-CONTEXT_PRECISION_PROMPT = textwrap.dedent("""\
-You are evaluating the precision of retrieved context for a programming exercise.
-
-Context Precision measures whether the retrieved chunks are relevant and properly 
-ranked — relevant chunks should appear before irrelevant ones.
-
-## Exercise Information
-- Exercise ID: {exercise_id}
-- Title: {title}  
-- Description: {description}
-
-## Retrieved Chunks (in retrieval order, from rank 1 to N)
+## Retrieved Course Context (Top-K Chunks in rank order 1..N)
 {chunks_with_ranks}
 
-## Task
-For each retrieved chunk, determine if it is relevant to solving or understanding 
-this specific exercise (YES/NO). A chunk is relevant if it teaches a concept, 
-technique, or provides an example directly applicable to this exercise.
+## Question / Problem Input
+{question}
 
-Then compute Context Precision@K using the formula:
-  precision@k = (1/K) × Σ (precision_at_i × relevance_i)
-  where precision_at_i = (relevant chunks up to rank i) / i
+## AI Generated Answer
+{answer}
 
-Respond ONLY with a JSON object (no markdown, no extra text):
-{{"chunks": [{{"rank": 1, "relevant": true/false, "reason": "brief"}}, ...], "score": <float 0.0-1.0>}}
+## Evaluation Tasks & Metrics
+1. **Faithfulness** (0.0 to 1.0): What fraction of factual statements in the AI answer are grounded in and verifiable from the retrieved course context? (1.0 = fully grounded, 0.0 = completely ungrounded/hallucinated).
+2. **Answer Relevancy** (0.0 to 1.0): How relevant and helpful is the AI answer to the student's question and exercise requirements? (1.0 = highly relevant, 0.0 = irrelevant).
+3. **Context Recall** (0.0 to 1.0): Does the retrieved course context cover the essential key concepts needed for this exercise? (1.0 = all concepts covered, 0.0 = none covered).
+4. **Context Precision** (0.0 to 1.0): Are the retrieved chunks relevant to the exercise, and are more relevant chunks placed at higher ranks? (1.0 = perfect ranking, 0.0 = irrelevant).
+
+Respond ONLY with a valid JSON object in this exact format (no markdown, no extra commentary):
+{{"faithfulness": <float 0.0-1.0>, "answer_relevancy": <float 0.0-1.0>, "context_recall": <float 0.0-1.0>, "context_precision": <float 0.0-1.0>, "reasoning": "brief 1-sentence explanation"}}
 """)
 
 # ---------------------------------------------------------------------------
@@ -517,66 +441,31 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                     print(" (LLM error) skip")
                     continue  # Don't append 0.0 — exclude from mean
 
-                # C. Evaluate Faithfulness
-                faith_prompt = FAITHFULNESS_PROMPT.format(
-                    context=context_str[:3000],
-                    question=query_text[:500],
-                    answer=answer[:1500],
-                )
-                faith_resp = call_llm(faith_prompt, api_url, api_key, model, temperature=0.0)
-                faith_data = parse_llm_json(faith_resp)
-                # Self-verify: compute score from claims array if available
-                claims = faith_data.get("claims", [])
-                if claims and isinstance(claims, list):
-                    supported = sum(1 for c in claims if c.get("supported"))
-                    faith_score = supported / len(claims)
-                else:
-                    faith_score = safe_float(faith_data.get("score", 0.0))
-                metrics["faithfulness"].append(faith_score)
-
-                # D. Evaluate Answer Relevancy
-                rel_prompt = ANSWER_RELEVANCY_PROMPT.format(
-                    question=query_text[:500],
-                    answer=answer[:1500],
-                )
-                rel_resp = call_llm(rel_prompt, api_url, api_key, model, temperature=0.0)
-                rel_data = parse_llm_json(rel_resp)
-                rel_score = safe_float(rel_data.get("score", 0.0))
-                metrics["answer_relevancy"].append(rel_score)
-
-                # E. Evaluate Context Recall
-                recall_prompt = CONTEXT_RECALL_PROMPT.format(
-                    exercise_id=ex_id,
-                    title=title,
-                    description=desc[:300],
-                    concepts=", ".join(concepts),
-                    context=context_str[:3000],
-                )
-                recall_resp = call_llm(recall_prompt, api_url, api_key, model, temperature=0.0)
-                recall_data = parse_llm_json(recall_resp)
-                # Self-verify: compute score from concepts array if available
-                concept_items = recall_data.get("concepts", [])
-                if concept_items and isinstance(concept_items, list):
-                    covered = sum(1 for c in concept_items if c.get("covered"))
-                    recall_score = covered / len(concept_items)
-                else:
-                    recall_score = safe_float(recall_data.get("score", 0.0))
-                metrics["context_recall"].append(recall_score)
-
-                # F. Evaluate Context Precision
+                # C. Unified RAGAs Evaluation (Single LLM Call for All 4 Metrics)
                 chunks_with_ranks = "\n".join([
                     f"**Rank {i+1}:** [{c.title}] (Source: {c.source})\n{c.content[:300]}..."
                     for i, (c, _) in enumerate(retrieved)
                 ])
-                prec_prompt = CONTEXT_PRECISION_PROMPT.format(
+                judge_prompt = RAGAS_COMBINED_JUDGE_PROMPT.format(
                     exercise_id=ex_id,
                     title=title,
-                    description=desc[:300],
+                    description=desc[:400],
+                    concepts=", ".join(concepts),
                     chunks_with_ranks=chunks_with_ranks,
+                    question=query_text[:600],
+                    answer=answer[:2000],
                 )
-                prec_resp = call_llm(prec_prompt, api_url, api_key, model, temperature=0.0)
-                prec_data = parse_llm_json(prec_resp)
-                prec_score = safe_float(prec_data.get("score", 0.0))
+                judge_resp = call_llm(judge_prompt, api_url, api_key, model, temperature=0.0, max_tokens=800)
+                judge_data = parse_llm_json(judge_resp)
+
+                faith_score = safe_float(judge_data.get("faithfulness", 0.0))
+                rel_score = safe_float(judge_data.get("answer_relevancy", 0.0))
+                recall_score = safe_float(judge_data.get("context_recall", 0.0))
+                prec_score = safe_float(judge_data.get("context_precision", 0.0))
+
+                metrics["faithfulness"].append(faith_score)
+                metrics["answer_relevancy"].append(rel_score)
+                metrics["context_recall"].append(recall_score)
                 metrics["context_precision"].append(prec_score)
 
                 elapsed = time.time() - t_exercise
@@ -599,6 +488,7 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                 # Rate limiting: small delay between exercises
                 time.sleep(0.5)
 
+            # Aggregate metrics for this engine
             agg = {}
             for k, values in metrics.items():
                 agg[k] = round(np.mean(values), 4) if values else float('nan')
@@ -609,7 +499,7 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
                   f"Faith={agg['faithfulness']:.4f}  "
                   f"Rel={agg['answer_relevancy']:.4f}  "
                   f"Recall={agg['context_recall']:.4f}  "
-                  f"Prec={agg['context_precision']:.4f}")
+                  f"Prec={agg['context_precision']:.4f}", flush=True)
 
     # 5. Print final summary table
     print("\n" + "=" * 90)
@@ -627,7 +517,7 @@ def run_ragas_evaluation(api_url: str, api_key: str, model: str, sample_size: in
 
     # Save results
     output_dir = os.path.dirname(__file__)
-    summary_path = os.path.join(output_dir, "ragas_eval_separate.json")
+    summary_path = os.path.join(output_dir, "ragas_eval_consolidated.json")
     with open(summary_path, "w") as f:
         json.dump({"summary": all_results, "detailed": detailed_records}, f, indent=2)
     print(f"\nResults saved to {summary_path}")

@@ -12,6 +12,12 @@ Across 3 Query Modalities for all 36 curriculum exercises:
   - Modality A: Pre-study / Metadata Query (Title + Description + Hints)
   - Modality B: Code / Debugging Query (Function definition + test failure analysis)
   - Modality C: Conceptual Query (Core Python concept & keywords)
+
+Relevance Judgement:
+  A retrieved chunk is considered relevant if it satisfies BOTH:
+    (a) It originates from the correct lecture file (lecture-level match), AND
+    (b) Its content covers at least one of the exercise's ground-truth concepts
+        (concept-level match via keyword overlap).
 """
 
 import os
@@ -208,6 +214,18 @@ def load_knowledge_base(knowledge_dir: str) -> List[RagChunk]:
                     chunks.extend(chunk_markdown(fp.read(), rel_path))
     return chunks
 
+def filter_teaching_chunks(chunks: List[RagChunk]) -> List[RagChunk]:
+    """Filter out Exercise description chunks, keeping only teaching content.
+    
+    Exercise chunks (titled 'Exercise X.Y: ...') contain only the problem
+    statement and empty code scaffolding — no teaching value for Pre-study
+    Guide generation. Removing them forces retrieval to surface the actual
+    lecture explanation chunks (e.g. 'The while loop', 'Lists', etc.)
+    """
+    import re
+    exercise_pattern = re.compile(r'^Exercise\s+\d', re.IGNORECASE)
+    return [c for c in chunks if not exercise_pattern.match(c.title)]
+
 # ---------------------------------------------------------------------------
 # 3. Retrieval Engines
 # ---------------------------------------------------------------------------
@@ -330,31 +348,102 @@ def load_benchmark_queries(repo_path: str) -> List[Dict[str, Any]]:
     return queries
 
 # ---------------------------------------------------------------------------
+# Concept keywords per exercise (ground truth for concept-level relevance)
+# ---------------------------------------------------------------------------
+EXERCISE_CONCEPTS = {
+    "ex1_7_gaussian": ["mathematical formulas", "function definition", "math module", "exp", "sqrt", "pi", "gaussian"],
+    "ex1_9_period": ["kepler", "mathematical formula", "exponentiation", "period", "orbit"],
+    "ex1_11_num_digits": ["while loop", "integer division", "counting", "digits"],
+    "ex1_13_odd_numbers": ["while loop", "modulo", "odd", "list append"],
+    "ex1_14_even_numbers": ["for loop", "range", "even", "list"],
+    "ex1_15_my_sum": ["for loop", "accumulator", "sum", "iterating"],
+    "ex1_16_distance": ["list", "physics", "distance", "for loop", "range"],
+    "ex1_17_my_cumsum": ["cumulative sum", "list", "running total"],
+    "ex1_18_compute_heights": ["while loop", "list append", "bouncing ball", "physics"],
+    "ex1_19_calculate_pi": ["series", "approximation", "for loop", "alternating", "pi"],
+    "ex2_1_mult": ["function", "def", "multiplication", "return"],
+    "ex2_3_heaviside": ["conditional", "piecewise", "if", "elif", "else", "heaviside"],
+    "ex2_4_my_factorial": ["recursion", "factorial", "loop", "function"],
+    "ex2_5_path_length": ["list", "iteration", "distance", "sqrt", "path"],
+    "ex2_6_approx_pi": ["series", "approximation", "convergence", "while loop", "pi"],
+    "ex2_7_prime_list": ["prime", "nested loop", "list comprehension"],
+    "ex2_8_h": ["gaussian", "math", "function composition"],
+    "ex2_9_w_wbits": ["bitwise", "binary", "while loop"],
+    "ex2_10_multiply": ["nested loop", "multiplication", "accumulation"],
+    "ex2_11_f_cubic": ["polynomial", "function", "return"],
+    "ex2_12_f_mult": ["higher-order", "function", "argument", "composition"],
+    "ex2_13_odd_bits": ["bitwise", "binary", "loop"],
+    "ex3_4_displacement": ["numpy", "array", "vectorized", "physics"],
+    "ex3_5_my_factorial": ["recursion", "factorial", "base case"],
+    "ex3_6_wave_speed": ["formula", "sqrt", "function", "wave"],
+    "ex3_8_read_temp_density": ["file", "string", "parsing", "read"],
+    "ex3_9_compute_velocity": ["differentiation", "array", "finite difference", "velocity"],
+    "ex4_1_read_constants": ["file", "reading", "dictionary", "splitting"],
+    "ex4_2_reverse_dict": ["dictionary", "key", "value", "swap", "comprehension"],
+    "ex4_3_triangle_area": ["geometry", "formula", "function", "triangle", "area"],
+    "ex4_4_read_densities": ["file", "dictionary", "parsing"],
+    "ex4_5_class_F": ["class", "method", "object"],
+    "ex4_6_simple_class": ["class", "__init__", "instance", "method"],
+    "ex4_7_account_transactions": ["class", "method", "state"],
+    "ex4_8_line_class": ["class", "mathematical", "method"],
+    "ex4_9_quadratic_class": ["class", "quadratic", "formula", "method"],
+}
+
+# ---------------------------------------------------------------------------
 # 5. Metric Calculations
 # ---------------------------------------------------------------------------
-def evaluate_retrieval(retrieved_chunks: List[Tuple[RagChunk, float]], gt_lecture: str, k_list=[1, 3, 5, 10]) -> Dict[str, Any]:
+def _chunk_matches_concepts(chunk: RagChunk, concepts: List[str]) -> bool:
+    """Check if a chunk's content covers at least one ground-truth concept keyword."""
+    text_lower = (chunk.title + " " + chunk.content).lower()
+    return any(kw.lower() in text_lower for kw in concepts)
+
+
+def evaluate_retrieval(
+    retrieved_chunks: List[Tuple[RagChunk, float]],
+    gt_lecture: str,
+    exercise_id: str = "",
+    k_list=[1, 3, 5, 10],
+) -> Dict[str, Any]:
     """
-    Check if retrieved chunk's source corresponds to the ground truth lecture.
-    Also checks specific title relevance.
+    Evaluate retrieval quality using concept-level relevance.
+
+    A chunk is relevant if:
+      (a) it originates from the correct lecture file, AND
+      (b) its content covers at least one ground-truth concept keyword.
+
+    Returns Hit@K, MRR, MAP, and first_rank.
     """
+    concepts = EXERCISE_CONCEPTS.get(exercise_id, [])
     hits = {f'hit@{k}': 0 for k in k_list}
     first_rank = None
-    
+    num_relevant = 0
+    sum_precision = 0.0  # for MAP
+
     for rank, (chunk, score) in enumerate(retrieved_chunks):
-        # A chunk is relevant if it comes from the target lecture
-        is_relevant = gt_lecture.lower() in chunk.source.lower()
+        # Relevance: lecture match AND concept match (if concepts available)
+        lecture_match = gt_lecture.lower() in chunk.source.lower()
+        if concepts:
+            is_relevant = lecture_match and _chunk_matches_concepts(chunk, concepts)
+        else:
+            is_relevant = lecture_match
+
         if is_relevant:
+            num_relevant += 1
+            sum_precision += num_relevant / (rank + 1)  # precision@rank for MAP
             if first_rank is None:
                 first_rank = rank + 1  # 1-indexed
             for k in k_list:
                 if (rank + 1) <= k:
                     hits[f'hit@{k}'] = 1
-                    
+
     reciprocal_rank = 1.0 / first_rank if first_rank is not None else 0.0
+    avg_precision = sum_precision / num_relevant if num_relevant > 0 else 0.0
+
     return {
         **hits,
         'reciprocal_rank': reciprocal_rank,
-        'first_rank': first_rank
+        'avg_precision': avg_precision,
+        'first_rank': first_rank,
     }
 
 # ---------------------------------------------------------------------------
@@ -421,42 +510,45 @@ def run_evaluation():
         results[mod_name] = {}
         for method in methods:
             results[mod_name][method] = {
-                'hit@1': [], 'hit@3': [], 'hit@5': [], 'hit@10': [], 'mrr': [], 'latency_ms': []
+                'hit@1': [], 'hit@3': [], 'hit@5': [], 'hit@10': [],
+                'mrr': [], 'map': [], 'latency_ms': []
             }
             
+        # Build chunk lookup dict for O(1) ChromaDB result mapping
+        chunk_by_id = {c.id: c for c in chunks}
+
         for q in queries:
             query_text = q[mod_key]
             gt = q['gt_lecture']
-            
+            ex_id = q['id']
+
+            def _append_metrics(method_name, m, lat):
+                r = results[mod_name][method_name]
+                r['hit@1'].append(m['hit@1'])
+                r['hit@3'].append(m['hit@3'])
+                r['hit@5'].append(m['hit@5'])
+                r['hit@10'].append(m['hit@10'])
+                r['mrr'].append(m['reciprocal_rank'])
+                r['map'].append(m['avg_precision'])
+                r['latency_ms'].append(lat)
+
             # 1. BM25-lite
             t0 = time.perf_counter()
             bm25_res = bm25_lite_retrieve(query_text, chunks, top_k=10)
             t1 = time.perf_counter()
-            bm25_metrics = evaluate_retrieval(bm25_res, gt)
+            bm25_metrics = evaluate_retrieval(bm25_res, gt, exercise_id=ex_id)
             bm25_lat = (t1 - t0) * 1000
-            
-            results[mod_name]['BM25-lite (Keyword)']['hit@1'].append(bm25_metrics['hit@1'])
-            results[mod_name]['BM25-lite (Keyword)']['hit@3'].append(bm25_metrics['hit@3'])
-            results[mod_name]['BM25-lite (Keyword)']['hit@5'].append(bm25_metrics['hit@5'])
-            results[mod_name]['BM25-lite (Keyword)']['hit@10'].append(bm25_metrics['hit@10'])
-            results[mod_name]['BM25-lite (Keyword)']['mrr'].append(bm25_metrics['reciprocal_rank'])
-            results[mod_name]['BM25-lite (Keyword)']['latency_ms'].append(bm25_lat)
-            
+            _append_metrics('BM25-lite (Keyword)', bm25_metrics, bm25_lat)
+
             # 2. Dense Embedding (Cosine)
             t0 = time.perf_counter()
             q_emb = model.encode([query_text], normalize_embeddings=True)[0]
             dense_res = dense_retrieve(q_emb, chunks, chunk_embs, top_k=10)
             t1 = time.perf_counter()
-            dense_metrics = evaluate_retrieval(dense_res, gt)
+            dense_metrics = evaluate_retrieval(dense_res, gt, exercise_id=ex_id)
             dense_lat = (t1 - t0) * 1000
-            
-            results[mod_name]['Dense Embedding (Cosine)']['hit@1'].append(dense_metrics['hit@1'])
-            results[mod_name]['Dense Embedding (Cosine)']['hit@3'].append(dense_metrics['hit@3'])
-            results[mod_name]['Dense Embedding (Cosine)']['hit@5'].append(dense_metrics['hit@5'])
-            results[mod_name]['Dense Embedding (Cosine)']['hit@10'].append(dense_metrics['hit@10'])
-            results[mod_name]['Dense Embedding (Cosine)']['mrr'].append(dense_metrics['reciprocal_rank'])
-            results[mod_name]['Dense Embedding (Cosine)']['latency_ms'].append(dense_lat)
-            
+            _append_metrics('Dense Embedding (Cosine)', dense_metrics, dense_lat)
+
             # 3. ChromaDB Backend
             t0 = time.perf_counter()
             chroma_q_res = collection.query(
@@ -471,33 +563,24 @@ def run_evaluation():
                     cid = chroma_q_res["ids"][0][idx]
                     src = chroma_q_res["metadatas"][0][idx].get("source", "")
                     title = chroma_q_res["metadatas"][0][idx].get("title", "")
-                    chunk_obj = next((c for c in chunks if c.id == cid), RagChunk(cid, src, title, "", []))
+                    chunk_obj = chunk_by_id.get(cid, RagChunk(cid, src, title, "", []))
                     dist = chroma_q_res["distances"][0][idx]
                     chroma_res.append((chunk_obj, 1.0 - dist))
-            chroma_metrics = evaluate_retrieval(chroma_res, gt)
+            chroma_metrics = evaluate_retrieval(chroma_res, gt, exercise_id=ex_id)
             chroma_lat = (t1 - t0) * 1000
-            
-            results[mod_name]['ChromaDB Backend']['hit@1'].append(chroma_metrics['hit@1'])
-            results[mod_name]['ChromaDB Backend']['hit@3'].append(chroma_metrics['hit@3'])
-            results[mod_name]['ChromaDB Backend']['hit@5'].append(chroma_metrics['hit@5'])
-            results[mod_name]['ChromaDB Backend']['hit@10'].append(chroma_metrics['hit@10'])
-            results[mod_name]['ChromaDB Backend']['mrr'].append(chroma_metrics['reciprocal_rank'])
-            results[mod_name]['ChromaDB Backend']['latency_ms'].append(chroma_lat)
-            
-            # 4. Hybrid (BM25 + Dense RRF)
-            t0 = time.perf_counter()
-            hybrid_res = hybrid_rrf_retrieve(bm25_res, dense_res, k=60, top_k=10)
-            t1 = time.perf_counter()
-            hybrid_metrics = evaluate_retrieval(hybrid_res, gt)
-            hybrid_lat = (t1 - t0) * 1000 + bm25_lat + dense_lat
-            
-            results[mod_name]['Hybrid (BM25 + Dense RRF)']['hit@1'].append(hybrid_metrics['hit@1'])
-            results[mod_name]['Hybrid (BM25 + Dense RRF)']['hit@3'].append(hybrid_metrics['hit@3'])
-            results[mod_name]['Hybrid (BM25 + Dense RRF)']['hit@5'].append(hybrid_metrics['hit@5'])
-            results[mod_name]['Hybrid (BM25 + Dense RRF)']['hit@10'].append(hybrid_metrics['hit@10'])
-            results[mod_name]['Hybrid (BM25 + Dense RRF)']['mrr'].append(hybrid_metrics['reciprocal_rank'])
-            results[mod_name]['Hybrid (BM25 + Dense RRF)']['latency_ms'].append(hybrid_lat)
-            
+            _append_metrics('ChromaDB Backend', chroma_metrics, chroma_lat)
+
+            # 4. Hybrid (BM25 + Dense RRF) — time the full pipeline end-to-end
+            t0_hybrid = time.perf_counter()
+            bm25_for_hybrid = bm25_lite_retrieve(query_text, chunks, top_k=10)
+            q_emb_hybrid = model.encode([query_text], normalize_embeddings=True)[0]
+            dense_for_hybrid = dense_retrieve(q_emb_hybrid, chunks, chunk_embs, top_k=10)
+            hybrid_res = hybrid_rrf_retrieve(bm25_for_hybrid, dense_for_hybrid, k=60, top_k=10)
+            t1_hybrid = time.perf_counter()
+            hybrid_metrics = evaluate_retrieval(hybrid_res, gt, exercise_id=ex_id)
+            hybrid_lat = (t1_hybrid - t0_hybrid) * 1000
+            _append_metrics('Hybrid (BM25 + Dense RRF)', hybrid_metrics, hybrid_lat)
+
             detailed_logs.append({
                 'exercise_id': q['id'],
                 'modality': mod_name,
@@ -516,9 +599,9 @@ def run_evaluation():
     summary_data = {}
     for mod_name in results:
         print(f"\n### Query Modality: {mod_name} (N = {len(queries)} queries)")
-        print("-" * 90)
-        print(f"{'Retrieval Engine':<28} | {'Hit@1':<8} | {'Hit@3':<8} | {'Hit@5':<8} | {'Hit@10':<8} | {'MRR':<8} | {'Latency':<8}")
-        print("-" * 90)
+        print("-" * 100)
+        print(f"{'Retrieval Engine':<28} | {'Hit@1':<8} | {'Hit@3':<8} | {'Hit@5':<8} | {'Hit@10':<8} | {'MRR':<8} | {'MAP':<8} | {'Latency':<8}")
+        print("-" * 100)
         summary_data[mod_name] = {}
         for method in methods:
             h1 = np.mean(results[mod_name][method]['hit@1']) * 100
@@ -526,17 +609,19 @@ def run_evaluation():
             h5 = np.mean(results[mod_name][method]['hit@5']) * 100
             h10 = np.mean(results[mod_name][method]['hit@10']) * 100
             mrr = np.mean(results[mod_name][method]['mrr'])
+            map_score = np.mean(results[mod_name][method]['map'])
             lat = np.mean(results[mod_name][method]['latency_ms'])
-            
+
             summary_data[mod_name][method] = {
                 'hit@1': round(h1, 2),
                 'hit@3': round(h3, 2),
                 'hit@5': round(h5, 2),
                 'hit@10': round(h10, 2),
                 'mrr': round(mrr, 4),
+                'map': round(map_score, 4),
                 'latency_ms': round(lat, 2)
             }
-            print(f"{method:<28} | {h1:>6.1f}% | {h3:>6.1f}% | {h5:>6.1f}% | {h10:>6.1f}% | {mrr:>6.4f} | {lat:>6.2f}ms")
+            print(f"{method:<28} | {h1:>6.1f}% | {h3:>6.1f}% | {h5:>6.1f}% | {h10:>6.1f}% | {mrr:>6.4f} | {map_score:>6.4f} | {lat:>6.2f}ms")
             
     # Save raw json output
     output_json_path = os.path.join(os.path.dirname(__file__), 'rag_eval_results.json')
