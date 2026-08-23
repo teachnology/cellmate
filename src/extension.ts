@@ -2028,12 +2028,14 @@ ${feedback}
         }
 
         // Retrieve RAG context using the metadata-based query (3 chunks for pre-study to keep prompt concise)
+        // Pre-study Guide: exclude exercise description chunks (they contain only problem
+        // statements with no teaching value). This matches the evaluation benchmark behaviour.
         let ragContext = '';
         if (ragMode === 'chromadb') {
           try {
             const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
-            await indexToChromaDB(LOCAL_REPO_PATH, ragServerUrl);
-            ragContext = await queryChromaDB(ragQuery, ragServerUrl, 3);
+            // Indexing already happened during sync (L1603), no need to re-index here
+            ragContext = await queryChromaDB(ragQuery, ragServerUrl, 3, true);
           } catch (err: any) {
             log('ChromaDB query failed for prestudy:', err.message);
           }
@@ -2045,18 +2047,18 @@ ${feedback}
             if (ragIndex.length > 0) {
               const embUrl = deriveEmbeddingUrl(apiUrl);
               const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
-              ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb);
+              ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb, true);
             }
           } catch (err: any) {
             log('Semantic RAG failed for prestudy, falling back to keyword:', err.message);
             await buildRagIndex(LOCAL_REPO_PATH);
             const ragIndex = loadRagIndex();
-            ragContext = retrieveContext(ragQuery, ragIndex, 3);
+            ragContext = retrieveContext(ragQuery, ragIndex, 3, undefined, true);
           }
         } else {
           await buildRagIndex(LOCAL_REPO_PATH);
           const ragIndex = loadRagIndex();
-          ragContext = retrieveContext(ragQuery, ragIndex, 3);
+          ragContext = retrieveContext(ragQuery, ragIndex, 3, undefined, true);
         }
 
         if (!ragContext) {

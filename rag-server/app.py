@@ -9,6 +9,7 @@ Run:  streamlit run app.py
 """
 
 import os
+import re
 import hashlib
 import streamlit as st
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -17,7 +18,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser
 
-from config import chroma_client, collection, model, COLLECTION_NAME, EMBEDDING_MODEL
+from config import chroma_client, collection, get_model, COLLECTION_NAME, EMBEDDING_MODEL
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -93,6 +94,12 @@ def get_existing_ids() -> set:
     return set(result["ids"])
 
 
+def _extract_section_title(text: str, fallback: str) -> str:
+    """Extract the nearest ## heading from a chunk's text, or use fallback."""
+    match = re.search(r'^##\s+(.+)$', text, re.MULTILINE)
+    return match.group(1).strip() if match else fallback
+
+
 # ---------------------------------------------------------------------------
 # Page 1: Upload
 # ---------------------------------------------------------------------------
@@ -120,6 +127,7 @@ def page_upload():
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
         )
+        model = get_model()
         existing_ids = get_existing_ids()
 
         total_chunks = 0
@@ -141,6 +149,7 @@ def page_upload():
 
             ids_batch = []
             docs_batch = []
+            embed_batch = []
             metas_batch = []
 
             for doc in docs:
@@ -151,18 +160,23 @@ def page_upload():
                     skipped_chunks += 1
                     continue
 
+                # Extract section title from ## heading if present
+                title = _extract_section_title(doc.page_content, uploaded_file.name)
+
                 ids_batch.append(chunk_id)
                 docs_batch.append(doc.page_content)
+                # Embed title + content together for better retrieval
+                embed_batch.append(f"{title}\n{doc.page_content}")
                 metas_batch.append({
                     "source": uploaded_file.name,
-                    "title": f"{uploaded_file.name} (chunk)",
+                    "title": title,
                 })
                 existing_ids.add(chunk_id)
                 new_chunks += 1
 
             # Embed and upsert new chunks
             if ids_batch:
-                embeddings = model.encode(docs_batch, show_progress_bar=False).tolist()
+                embeddings = model.encode(embed_batch, show_progress_bar=False).tolist()
                 collection.upsert(
                     ids=ids_batch,
                     embeddings=embeddings,
@@ -228,6 +242,7 @@ def page_chat():
         retrieved_context = ""
         sources_display = ""
         if collection.count() > 0:
+            model = get_model()
             query_embedding = model.encode([prompt], show_progress_bar=False).tolist()
             results = collection.query(
                 query_embeddings=query_embedding,
