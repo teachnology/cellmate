@@ -161,8 +161,49 @@ def _extract_section_title(text: str, fallback: str) -> str:
     return match.group(1).strip() if match else fallback
 
 
+def _get_indexed_file_stats() -> dict:
+    """Return {source_filename: chunk_count} from the current collection."""
+    doc_count = collection.count()
+    if doc_count == 0:
+        return {}
+    # Fetch all metadatas (ChromaDB get() returns everything when no IDs specified)
+    all_data = collection.get(include=["metadatas"])
+    stats = {}
+    for meta in all_data["metadatas"]:
+        src = meta.get("source", "unknown")
+        stats[src] = stats.get(src, 0) + 1
+    return stats
+
+
+def _delete_chunks_by_source(source_name: str):
+    """Delete all chunks belonging to a specific source file."""
+    all_data = collection.get(include=["metadatas"])
+    ids_to_delete = []
+    for i, meta in enumerate(all_data["metadatas"]):
+        if meta.get("source") == source_name:
+            ids_to_delete.append(all_data["ids"][i])
+    if ids_to_delete:
+        collection.delete(ids=ids_to_delete)
+
+
+def _export_conversation_md(messages: list) -> str:
+    """Export conversation history as a Markdown string."""
+    lines = [
+        f"# CellMate KB Chat Export",
+        f"*Exported at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n",
+    ]
+    for msg in messages:
+        role = " Student" if msg["role"] == "user" else " Assistant"
+        lines.append(f"### {role}\n")
+        lines.append(msg["content"])
+        if msg.get("sources"):
+            lines.append(f"\n<details><summary>📎 Retrieved sources</summary>\n\n{msg['sources']}\n</details>")
+        lines.append("")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
-# Page 1: Upload
+# Page 1: Upload & Knowledge Base Management
 # ---------------------------------------------------------------------------
 def page_upload():
     st.header("📤 Knowledge Base Upload")
@@ -194,56 +235,60 @@ def page_upload():
         total_chunks = 0
         new_chunks = 0
         skipped_chunks = 0
+        errors = []
 
         progress = st.progress(0, text="Processing files...")
 
         for idx, uploaded_file in enumerate(uploaded_files):
-            content = read_file_content(uploaded_file)
-            if not content.strip():
-                continue
-
-            # Split into chunks
-            docs = splitter.create_documents(
-                [content],
-                metadatas=[{"source": uploaded_file.name}],
-            )
-
-            ids_batch = []
-            docs_batch = []
-            embed_batch = []
-            metas_batch = []
-
-            for doc in docs:
-                chunk_id = md5(doc.page_content)
-                total_chunks += 1
-
-                if chunk_id in existing_ids:
-                    skipped_chunks += 1
+            try:
+                content = read_file_content(uploaded_file)
+                if not content.strip():
                     continue
 
-                # Extract section title from ## heading if present
-                title = _extract_section_title(doc.page_content, uploaded_file.name)
-
-                ids_batch.append(chunk_id)
-                docs_batch.append(doc.page_content)
-                # Embed title + content together for better retrieval
-                embed_batch.append(f"{title}\n{doc.page_content}")
-                metas_batch.append({
-                    "source": uploaded_file.name,
-                    "title": title,
-                })
-                existing_ids.add(chunk_id)
-                new_chunks += 1
-
-            # Embed and upsert new chunks
-            if ids_batch:
-                embeddings = model.encode(embed_batch, show_progress_bar=False).tolist()
-                collection.upsert(
-                    ids=ids_batch,
-                    embeddings=embeddings,
-                    documents=docs_batch,
-                    metadatas=metas_batch,
+                # Split into chunks
+                docs = splitter.create_documents(
+                    [content],
+                    metadatas=[{"source": uploaded_file.name}],
                 )
+
+                ids_batch = []
+                docs_batch = []
+                embed_batch = []
+                metas_batch = []
+
+                for doc in docs:
+                    chunk_id = md5(doc.page_content)
+                    total_chunks += 1
+
+                    if chunk_id in existing_ids:
+                        skipped_chunks += 1
+                        continue
+
+                    # Extract section title from ## heading if present
+                    title = _extract_section_title(doc.page_content, uploaded_file.name)
+
+                    ids_batch.append(chunk_id)
+                    docs_batch.append(doc.page_content)
+                    # Embed title + content together for better retrieval
+                    embed_batch.append(f"{title}\n{doc.page_content}")
+                    metas_batch.append({
+                        "source": uploaded_file.name,
+                        "title": title,
+                    })
+                    existing_ids.add(chunk_id)
+                    new_chunks += 1
+
+                # Embed and upsert new chunks
+                if ids_batch:
+                    embeddings = model.encode(embed_batch, show_progress_bar=False).tolist()
+                    collection.upsert(
+                        ids=ids_batch,
+                        embeddings=embeddings,
+                        documents=docs_batch,
+                        metadatas=metas_batch,
+                    )
+            except Exception as e:
+                errors.append(f"`{uploaded_file.name}`: {e}")
 
             progress.progress((idx + 1) / len(uploaded_files),
                               text=f"Processing {uploaded_file.name}...")
@@ -257,19 +302,56 @@ def page_upload():
         col2.metric("Duplicates skipped", skipped_chunks)
         col3.metric("Total in KB", collection.count())
 
-    # Current collection stats
-    st.markdown("---")
-    st.subheader("📊 Current Knowledge Base")
-    doc_count = collection.count()
-    st.info(f"Total documents in ChromaDB: **{doc_count}**")
+        if errors:
+            st.error("The following files had errors during processing:")
+            for err in errors:
+                st.markdown(f"- {err}")
 
-    if doc_count > 0 and st.button("🔍 Preview (first 10 chunks)"):
-        preview = collection.peek(limit=10)
-        for i, doc_id in enumerate(preview["ids"]):
-            meta = preview["metadatas"][i] if preview["metadatas"] else {}
-            content = preview["documents"][i] if preview["documents"] else ""
-            with st.expander(f"**{meta.get('source', 'unknown')}** — {doc_id[:12]}..."):
-                st.code(content[:500], language="text")
+    # -----------------------------------------------------------------------
+    # Knowledge Base Management
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("📊 Knowledge Base Management")
+
+    doc_count = collection.count()
+    st.info(f"Total chunks in ChromaDB: **{doc_count}**")
+
+    if doc_count > 0:
+        # File-level inventory
+        file_stats = _get_indexed_file_stats()
+        if file_stats:
+            st.markdown("**Indexed files:**")
+            for src, cnt in sorted(file_stats.items()):
+                col_file, col_cnt, col_del = st.columns([5, 1, 1])
+                col_file.markdown(f"`{src}`")
+                col_cnt.markdown(f"**{cnt}** chunks")
+                if col_del.button("🗑️", key=f"del_{src}", help=f"Delete all chunks from {src}"):
+                    _delete_chunks_by_source(src)
+                    st.success(f"Deleted all chunks from `{src}`.")
+                    st.rerun()
+
+        # Preview
+        if st.button("🔍 Preview (first 10 chunks)"):
+            preview = collection.peek(limit=10)
+            for i, doc_id in enumerate(preview["ids"]):
+                meta = preview["metadatas"][i] if preview["metadatas"] else {}
+                content = preview["documents"][i] if preview["documents"] else ""
+                with st.expander(f"**{meta.get('title', '?')}** — {meta.get('source', '?')} — {doc_id[:12]}..."):
+                    st.code(content[:500], language="text")
+
+        # Clear entire KB
+        st.markdown("---")
+        with st.expander("⚠️ Danger Zone"):
+            st.warning("This will permanently delete all indexed documents from ChromaDB.")
+            if st.button("🗑️ Clear Entire Knowledge Base", type="primary"):
+                import config
+                chroma_client.delete_collection(COLLECTION_NAME)
+                config.collection = chroma_client.get_or_create_collection(
+                    name=COLLECTION_NAME,
+                    metadata={"hnsw:space": "cosine"},
+                )
+                st.success("Knowledge base cleared! All chunks have been deleted.")
+                st.rerun()
 
 
 # ---------------------------------------------------------------------------
