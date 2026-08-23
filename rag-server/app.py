@@ -366,7 +366,58 @@ def page_chat():
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
+    # -----------------------------------------------------------------------
+    # Chat sidebar controls
+    # -----------------------------------------------------------------------
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🎛️ Chat Controls")
+
+    # RAG on/off toggle
+    use_rag = st.sidebar.toggle("Enable RAG Context", value=True,
+                                 help="When OFF, the LLM answers using only its own knowledge (no retrieval).")
+
+    # Top-K slider
+    top_k = st.sidebar.slider("Top-K chunks to retrieve", min_value=1, max_value=10, value=3,
+                               help="Number of most similar chunks to retrieve from the knowledge base.")
+
+    # Similarity threshold
+    sim_threshold = st.sidebar.slider("Min similarity threshold", min_value=0.0, max_value=1.0,
+                                       value=0.0, step=0.05,
+                                       help="Chunks below this similarity score will be excluded. Set to 0 to disable filtering.")
+
+    # Exclude exercises toggle
+    exclude_exercises = st.sidebar.toggle("Exclude Exercise statements", value=False,
+                                           help="Filter out Exercise description chunks (which only contain problem statements).")
+
+    # Temperature
+    temperature = st.sidebar.slider("Temperature", min_value=0.0, max_value=1.0, value=0.0, step=0.1,
+                                     help="0.0 = deterministic and factual, 1.0 = creative and varied.")
+
+    # Prompt template selection
+    template_name = st.sidebar.selectbox(
+        "Prompt Template",
+        list(PROMPT_TEMPLATES.keys()),
+        help="Choose the assistant's persona and answering style.",
+    )
+
+    # Conversation controls
+    st.sidebar.markdown("---")
+    col_clear, col_export = st.sidebar.columns(2)
+    if st.session_state.messages:
+        if col_clear.button("🗑️ Clear chat"):
+            st.session_state.messages = []
+            st.rerun()
+        export_md = _export_conversation_md(st.session_state.messages)
+        col_export.download_button(
+            "📥 Export",
+            data=export_md,
+            file_name=f"cellmate_chat_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.md",
+            mime="text/markdown",
+        )
+
+    # -----------------------------------------------------------------------
     # Display chat history
+    # -----------------------------------------------------------------------
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -374,24 +425,32 @@ def page_chat():
                 with st.expander("📎 Retrieved sources"):
                     st.markdown(msg["sources"])
 
+    # -----------------------------------------------------------------------
     # Chat input
+    # -----------------------------------------------------------------------
     if prompt := st.chat_input("Ask a question about the course materials..."):
         # Show user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Retrieve from ChromaDB
+        # Retrieve from ChromaDB (if RAG is enabled)
         retrieved_context = ""
         sources_display = ""
-        if collection.count() > 0:
+        exercise_pattern = re.compile(r'^Exercise\s+\d', re.IGNORECASE)
+
+        if use_rag and collection.count() > 0:
             model = get_model()
             query_embedding = model.encode([prompt], show_progress_bar=False).tolist()
+
+            # Fetch more than top_k if filtering exercises, to have enough after filtering
+            fetch_k = min(top_k * 4 if exclude_exercises else top_k, collection.count())
             results = collection.query(
                 query_embeddings=query_embedding,
-                n_results=min(3, collection.count()),
+                n_results=fetch_k,
                 include=["documents", "metadatas", "distances"],
             )
+
             if results and results["ids"] and results["ids"][0]:
                 context_parts = []
                 source_parts = []
@@ -400,23 +459,38 @@ def page_chat():
                     meta = results["metadatas"][0][i] if results["metadatas"] else {}
                     dist = results["distances"][0][i] if results["distances"] else 0
                     sim = round(1.0 - dist, 3)
+
+                    # Skip exercise chunks if filtering is enabled
+                    title = meta.get("title", "")
+                    if exclude_exercises and exercise_pattern.match(title):
+                        continue
+
+                    # Skip chunks below similarity threshold
+                    if sim < sim_threshold:
+                        continue
+
                     context_parts.append(doc)
                     source_parts.append(
-                        f"- **{meta.get('source', '?')}** (similarity: {sim})\n  > {doc[:150]}..."
+                        f"- **{meta.get('source', '?')}** | {title} (similarity: {sim})\n  > {doc[:150]}..."
                     )
+
+                    if len(context_parts) >= top_k:
+                        break
+
                 retrieved_context = "\n\n---\n\n".join(context_parts)
                 sources_display = "\n".join(source_parts)
 
         # Build LangChain chain
         if not llm_api_key:
             with st.chat_message("assistant"):
-                st.error("Please configure LLM API Key in the sidebar.")
+                st.error("⚠️ Please configure LLM API Key in the sidebar.")
             return
 
         llm = ChatOpenAI(
             base_url=llm_api_url,
             api_key=llm_api_key,
             model=llm_model,
+            temperature=temperature,
             streaming=True,
         )
 
@@ -428,12 +502,17 @@ def page_chat():
             else:
                 history_messages.append(AIMessage(content=msg["content"]))
 
+        # Select prompt template
+        system_prompt = PROMPT_TEMPLATES[template_name]
+
+        # Build context string
+        if use_rag:
+            context_str = retrieved_context or "(No relevant materials found in the knowledge base.)"
+        else:
+            context_str = "(RAG retrieval is disabled. Answering from model knowledge only.)"
+
         chat_prompt = ChatPromptTemplate.from_messages([
-            ("system",
-             "You are a helpful Python teaching assistant. "
-             "Answer the student's question based on the following course materials. "
-             "If the materials don't contain relevant information, say so honestly.\n\n"
-             "Course Materials:\n{context}"),
+            ("system", system_prompt),
             MessagesPlaceholder(variable_name="history"),
             ("human", "{question}"),
         ])
@@ -442,16 +521,23 @@ def page_chat():
 
         # Stream the response
         with st.chat_message("assistant"):
-            response = st.write_stream(
-                chain.stream({
-                    "context": retrieved_context or "(No relevant materials found in the knowledge base.)",
-                    "history": history_messages,
-                    "question": prompt,
-                })
-            )
+            try:
+                response = st.write_stream(
+                    chain.stream({
+                        "context": context_str,
+                        "history": history_messages,
+                        "question": prompt,
+                    })
+                )
+            except Exception as e:
+                response = f"⚠️ LLM call failed: {e}"
+                st.error(response)
+
             if sources_display:
                 with st.expander("📎 Retrieved sources"):
                     st.markdown(sources_display)
+            elif use_rag and collection.count() > 0:
+                st.caption("ℹ️ No chunks passed the similarity threshold.")
 
         # Save assistant message
         st.session_state.messages.append({
@@ -459,12 +545,6 @@ def page_chat():
             "content": response,
             "sources": sources_display,
         })
-
-    # Sidebar: conversation controls
-    if st.session_state.messages:
-        if st.sidebar.button("🗑️ Clear conversation"):
-            st.session_state.messages = []
-            st.rerun()
 
 
 # ---------------------------------------------------------------------------
