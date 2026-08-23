@@ -10,7 +10,9 @@ Run:  streamlit run app.py
 
 import os
 import re
+import json
 import hashlib
+import datetime
 import streamlit as st
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import ChatOpenAI
@@ -30,30 +32,89 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
+# Auto-config: read defaults from CELLMATE_* env vars → .vscode/settings.json
+# ---------------------------------------------------------------------------
+def _load_default_config() -> dict:
+    """Load LLM config from environment variables or .vscode/settings.json.
+
+    Priority: CELLMATE_* env vars → LLM_* env vars → .vscode/settings.json → empty.
+    """
+    cfg = {"api_url": "", "api_key": "", "model": ""}
+
+    # 1. Environment variables (highest priority)
+    cfg["api_url"] = os.environ.get("CELLMATE_API_URL") or os.environ.get("LLM_API_URL", "")
+    cfg["api_key"] = os.environ.get("CELLMATE_API_KEY") or os.environ.get("LLM_API_KEY", "")
+    cfg["model"] = os.environ.get("CELLMATE_MODEL") or os.environ.get("LLM_MODEL", "")
+
+    # 2. Fallback: read from .vscode/settings.json (CellMate.* keys)
+    vscode_settings_path = os.path.join(os.path.dirname(__file__), "..", ".vscode", "settings.json")
+    if os.path.exists(vscode_settings_path):
+        try:
+            with open(vscode_settings_path, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+            cfg["api_url"] = cfg["api_url"] or settings.get("CellMate.apiUrl", "")
+            cfg["api_key"] = cfg["api_key"] or settings.get("CellMate.apiKey", "")
+            cfg["model"] = cfg["model"] or settings.get("CellMate.modelName", "")
+        except Exception:
+            pass
+
+    return cfg
+
+
+_defaults = _load_default_config()
+
+# ---------------------------------------------------------------------------
 # Sidebar — Navigation + LLM config
 # ---------------------------------------------------------------------------
 st.sidebar.title("📚 CellMate KB")
 page = st.sidebar.radio("Navigate", ["Upload", "Chat"], label_visibility="collapsed")
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("LLM Configuration")
+st.sidebar.subheader("🔧 LLM Configuration")
 llm_api_url = st.sidebar.text_input(
     "API Base URL",
-    value=os.environ.get("LLM_API_URL", "https://api.openai.com/v1"),
+    value=_defaults["api_url"],
+    placeholder="https://chat.ese.ic.ac.uk/api/generate",
 )
 llm_api_key = st.sidebar.text_input(
     "API Key",
-    value=os.environ.get("LLM_API_KEY", ""),
+    value=_defaults["api_key"],
     type="password",
+    placeholder="your-api-key",
 )
 llm_model = st.sidebar.text_input(
     "Model",
-    value=os.environ.get("LLM_MODEL", "gpt-4o-mini"),
+    value=_defaults["model"] or "gpt-oss:120b",
+    placeholder="gpt-oss:120b",
 )
 
 st.sidebar.markdown("---")
-st.sidebar.caption(f"Embedding: `{EMBEDDING_MODEL}`")
-st.sidebar.caption(f"Documents in KB: **{collection.count()}**")
+st.sidebar.caption(f"Embedding model: `{EMBEDDING_MODEL}`")
+st.sidebar.caption(f"Chunks in KB: **{collection.count()}**")
+
+# ---------------------------------------------------------------------------
+# Prompt templates for Chat
+# ---------------------------------------------------------------------------
+PROMPT_TEMPLATES = {
+    "Teaching Assistant": (
+        "You are a helpful Python teaching assistant. "
+        "Answer the student's question based on the following course materials. "
+        "If the materials don't contain relevant information, say so honestly.\n\n"
+        "Course Materials:\n{context}"
+    ),
+    "Socratic Tutor": (
+        "You are a Socratic Python tutor. Instead of giving direct answers, "
+        "guide the student to discover the solution themselves through questions and hints. "
+        "Use the course materials below as your knowledge base, but never reveal code solutions directly.\n\n"
+        "Course Materials:\n{context}"
+    ),
+    "Exam Revision Helper": (
+        "You are an exam revision assistant for a Python programming course. "
+        "Summarise key concepts, highlight common mistakes, and provide concise revision notes "
+        "based on the course materials below.\n\n"
+        "Course Materials:\n{context}"
+    ),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +131,6 @@ def read_file_content(uploaded_file) -> str:
     raw = uploaded_file.read()
 
     if name.endswith(".ipynb"):
-        import json
         try:
             nb = json.loads(raw.decode("utf-8"))
             parts = []
@@ -80,7 +140,8 @@ def read_file_content(uploaded_file) -> str:
                 if text.strip():
                     parts.append(text)
             return "\n\n".join(parts)
-        except Exception:
+        except Exception as e:
+            st.warning(f"⚠️ Failed to parse notebook `{name}`: {e}")
             return raw.decode("utf-8", errors="replace")
     else:
         return raw.decode("utf-8", errors="replace")
