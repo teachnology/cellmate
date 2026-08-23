@@ -16,11 +16,18 @@ COLLECTION_NAME = "cellmate_knowledge"
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
 # ---------------------------------------------------------------------------
-# Singletons (loaded once per process)
+# Singletons (lazy-loaded to avoid blocking startup)
 # ---------------------------------------------------------------------------
-print(f"[config] Loading embedding model: {EMBEDDING_MODEL} ...")
-model = SentenceTransformer(EMBEDDING_MODEL)
-print("[config] Embedding model loaded.")
+_model = None
+
+def get_model() -> SentenceTransformer:
+    """Lazily load the embedding model on first use."""
+    global _model
+    if _model is None:
+        print(f"[config] Loading embedding model: {EMBEDDING_MODEL} ...")
+        _model = SentenceTransformer(EMBEDDING_MODEL)
+        print("[config] Embedding model loaded.")
+    return _model
 
 import shutil
 
@@ -47,3 +54,4 @@ def init_chroma():
         )
 
 collection = init_chroma()
+

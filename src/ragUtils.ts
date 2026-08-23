@@ -301,7 +301,10 @@ export async function buildRagIndex(repoPath: string): Promise<RagChunk[]> {
 // ======================== Semantic RAG (Embedding) ========================
 
 /**
- * Compute cosine similarity between two vectors
+ * Compute cosine similarity between two vectors.
+ * Note: If both vectors are pre-normalized (unit length), this reduces
+ * to a simple dot product. SentenceTransformers with normalize_embeddings=True
+ * produces unit vectors, so the norm computation below is a safety fallback.
  */
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length || a.length === 0) return 0;
@@ -386,8 +389,9 @@ export async function buildSemanticIndex(
   const chunks = await buildRagIndex(repoPath);
   if (chunks.length === 0) return chunks;
 
-  // Check if embeddings are already cached and up-to-date
-  if (chunks[0].embedding && chunks[0].embedding.length > 0) {
+  // Check if ALL chunks already have embeddings cached (not just the first)
+  const allHaveEmbeddings = chunks.every(c => c.embedding && c.embedding.length > 0);
+  if (allHaveEmbeddings) {
     return chunks;
   }
 
@@ -469,26 +473,29 @@ export function retrieveContext(
         score: cosineSimilarity(queryEmbedding, chunk.embedding!),
       }));
   } else {
-    // BM25-lite keyword mode (existing logic)
+    // BM25-lite keyword mode
     const queryTokens = [...new Set(tokenize(query))];
     if (queryTokens.length === 0) return '';
 
     const N = pool.length;
 
+    // Pre-build token Sets for O(1) lookup (fix: was O(n) Array.includes())
+    const chunkTokenSets = pool.map(c => new Set(c.tokens));
+
     // Pre-compute document frequency for each query token
     const df = new Map<string, number>();
     for (const token of queryTokens) {
       let count = 0;
-      for (const chunk of pool) {
-        if (chunk.tokens.includes(token)) count++;
+      for (const tokenSet of chunkTokenSets) {
+        if (tokenSet.has(token)) count++;
       }
       df.set(token, count);
     }
 
     // Score each chunk
-    scored = pool.map(chunk => {
+    scored = pool.map((chunk, idx) => {
       let score = 0;
-      const chunkTokenSet = new Set(chunk.tokens);
+      const chunkTokenSet = chunkTokenSets[idx];
       for (const token of queryTokens) {
         if (chunkTokenSet.has(token)) {
           const termDf = df.get(token) || 0;
@@ -511,10 +518,14 @@ export function retrieveContext(
     .join('\n\n---\n\n');
 }
 
+// Track the last indexed content hash to avoid unnecessary full re-index
+let _lastIndexedHash = '';
+
 // ======================== ChromaDB Backend (Option 2) ========================
 /**
  * Send chunked knowledge files to the ChromaDB backend for indexing.
  * Reuses the existing file chunking logic (md, py, ipynb, txt).
+ * Uses content hashing to skip re-index if knowledge base hasn't changed.
  */
 export async function indexToChromaDB(repoPath: string, serverUrl: string): Promise<number> {
   const knowledgeDir = path.join(repoPath, 'knowledge');
@@ -533,6 +544,15 @@ export async function indexToChromaDB(repoPath: string, serverUrl: string): Prom
     }
   }
   if (allChunks.length === 0) return 0;
+
+  // Content-hash based dedup: skip re-index if knowledge base unchanged
+  const contentHash = crypto.createHash('md5')
+    .update(allChunks.map(c => c.id).sort().join(','))
+    .digest('hex');
+  if (contentHash === _lastIndexedHash) {
+    return allChunks.length;  // Already indexed, skip
+  }
+
   // Send chunks to the ChromaDB backend
   const url = serverUrl.replace(/\/$/, '');
   const payload = {
@@ -542,12 +562,13 @@ export async function indexToChromaDB(repoPath: string, serverUrl: string): Prom
       title: c.title,
       content: c.content,
     })),
-    reset: true,  // re-index from scratch each sync
+    reset: true,
   };
   const resp = await axios.post(`${url}/index`, payload, {
     headers: { 'Content-Type': 'application/json' },
     timeout: 120000,
   });
+  _lastIndexedHash = contentHash;
   return resp.data.indexed || 0;
 }
 

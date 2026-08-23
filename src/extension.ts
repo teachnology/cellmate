@@ -1607,7 +1607,7 @@ ${feedback}
               vscode.window.showWarningMessage(`ChromaDB RAG server unreachable at ${ragServerUrl}. RAG context will be empty.`);
             }
           } else if (ragMode === 'semantic') {
-            const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+            const embModel = cfg.get<string>('embeddingModel', 'nomic-embed-text:137m-v1.5-fp16');
             await buildSemanticIndex(LOCAL_REPO_PATH, apiUrl, apiKey, embModel);
           } else {
             await buildRagIndex(LOCAL_REPO_PATH);
@@ -1821,7 +1821,7 @@ ${feedback}
               // Semantic mode: embed query and use cosine similarity
               if (ragMode === 'semantic' && ragIndex[0]?.embedding) {
                 try {
-                  const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+                  const embModel = cfg.get<string>('embeddingModel', 'nomic-embed-text:137m-v1.5-fp16');
                   const embUrl = deriveEmbeddingUrl(apiUrl);
                   const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
                   ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb);
@@ -2028,35 +2028,37 @@ ${feedback}
         }
 
         // Retrieve RAG context using the metadata-based query (3 chunks for pre-study to keep prompt concise)
+        // Pre-study Guide: exclude exercise description chunks (they contain only problem
+        // statements with no teaching value). This matches the evaluation benchmark behaviour.
         let ragContext = '';
         if (ragMode === 'chromadb') {
           try {
             const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
-            await indexToChromaDB(LOCAL_REPO_PATH, ragServerUrl);
-            ragContext = await queryChromaDB(ragQuery, ragServerUrl, 3);
+            // Indexing already happened during sync (L1603), no need to re-index here
+            ragContext = await queryChromaDB(ragQuery, ragServerUrl, 3, true);
           } catch (err: any) {
             log('ChromaDB query failed for prestudy:', err.message);
           }
         } else if (ragMode === 'semantic') {
           try {
-            const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+            const embModel = cfg.get<string>('embeddingModel', 'nomic-embed-text:137m-v1.5-fp16');
             await buildSemanticIndex(LOCAL_REPO_PATH, apiUrl, apiKey, embModel);
             const ragIndex = loadRagIndex();
             if (ragIndex.length > 0) {
               const embUrl = deriveEmbeddingUrl(apiUrl);
               const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
-              ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb);
+              ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb, true);
             }
           } catch (err: any) {
             log('Semantic RAG failed for prestudy, falling back to keyword:', err.message);
             await buildRagIndex(LOCAL_REPO_PATH);
             const ragIndex = loadRagIndex();
-            ragContext = retrieveContext(ragQuery, ragIndex, 3);
+            ragContext = retrieveContext(ragQuery, ragIndex, 3, undefined, true);
           }
         } else {
           await buildRagIndex(LOCAL_REPO_PATH);
           const ragIndex = loadRagIndex();
-          ragContext = retrieveContext(ragQuery, ragIndex, 3);
+          ragContext = retrieveContext(ragQuery, ragIndex, 3, undefined, true);
         }
 
         if (!ragContext) {
