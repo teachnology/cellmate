@@ -42,18 +42,18 @@
         "properties": {
           "CellMate.apiUrl": {
             "type": "string",
-            "description": "API URL for the LLM service",
+            "description": "Base API URL for the main LLM service (e.g., 'https://chat.ese.ic.ac.uk/api/generate' for Imperial ESE, 'https://api.openai.com/v1/chat/completions' for OpenAI, or 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions' for Aliyun Bailian)",
             "order": 0
           },
           "CellMate.apiKey": {
             "type": "string",
-            "description": "API key for the LLM service",
+            "description": "API key / token for the LLM service (Bearer token for OpenAI/Aliyun, or your Imperial ESE token)",
             "order": 1
           },
           "CellMate.modelName": {
             "type": "string",
             "default": "gpt-oss:120b",
-            "description": "The model name used for AI feedback",
+            "description": "Main generative LLM model used for AI Feedback, Pre-study Guide, Explain/Expand, and Error Helper (e.g., 'gpt-oss:120b' for Imperial chat.ese, 'qwen3.7-plus' for Aliyun Bailian, 'gpt-4o-mini' for OpenAI)",
             "order": 2
           },
           "CellMate.templateId": {
@@ -69,32 +69,32 @@
           "CellMate.useRAG": {
             "type": "boolean",
             "default": false,
-            "description": "Enable RAG to ground AI feedback in course materials from the knowledge/ directory in the promptfolio repository."
+            "description": "Enable RAG to ground AI Feedback in course materials from the knowledge/ directory in the promptfolio repository. It is required for the Pre-study Guide feature."
           },
           "CellMate.ragMode": {
             "type": "string",
             "default": "keyword",
             "enum": [
               "keyword",
-              "semantic",
-              "chromadb"
+              "chromadb",
+              "semantic"
             ],
             "enumDescriptions": [
-              "BM25 keyword matching (no extra API calls, fast)",
-              "Embedding-based semantic search (uses LLM API for embeddings, more accurate)",
-              "ChromaDB backend with local SentenceTransformers (requires running rag-server)"
+              "Keyword (BM25): Pure local TypeScript search, 0 model calls, fast & zero cost (Default)",
+              "ChromaDB Backend: Local vector search with all-MiniLM-L6-v2 from SentenceTransformers (Requires running python rag-server/server.py, 0 external API cost)",
+              "Semantic (Cloud API): Calls cloud Embedding API using CellMate.embeddingModel (Uses CellMate.apiUrl/apiKey, e.g., nomic-embed-text for chat.ese, text-embedding-3-small for OpenAI)"
             ],
-            "description": "RAG retrieval mode: keyword (BM25), semantic (embedding via LLM API), or chromadb (separate backend)"
+            "description": "RAG retrieval mode: 'keyword' (local BM25), 'chromadb' (local SentenceTransformers + ChromaDB), or 'semantic' (cloud Embedding API)"
           },
           "CellMate.embeddingModel": {
             "type": "string",
-            "default": "text-embedding-3-small",
-            "description": "Embedding model name for semantic RAG mode (e.g., text-embedding-3-small for OpenAI, nomic-embed-text for Ollama)"
+            "default": "nomic-embed-text:137m-v1.5-fp16",
+            "description": "Embedding model name used only when ragMode is 'semantic'. For chat.ese: 'nomic-embed-text:137m-v1.5-fp16' / 'bge-m3:latest' / 'all-minilm:33m'; For OpenAI: 'text-embedding-3-small'; For Aliyun: 'text-embedding-v3'"
           },
           "CellMate.ragServerUrl": {
             "type": "string",
             "default": "http://localhost:8100",
-            "description": "URL of the ChromaDB RAG backend server (used when ragMode is 'chromadb')"
+            "description": "URL of the local ChromaDB RAG backend server (Default: http://localhost:8100, used only when ragMode is 'chromadb')"
           },
           "CellMate.errorHelperOutput": {
             "type": "string",

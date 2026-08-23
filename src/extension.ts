@@ -1607,7 +1607,7 @@ ${feedback}
               vscode.window.showWarningMessage(`ChromaDB RAG server unreachable at ${ragServerUrl}. RAG context will be empty.`);
             }
           } else if (ragMode === 'semantic') {
-            const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+            const embModel = cfg.get<string>('embeddingModel', 'nomic-embed-text:137m-v1.5-fp16');
             await buildSemanticIndex(LOCAL_REPO_PATH, apiUrl, apiKey, embModel);
           } else {
             await buildRagIndex(LOCAL_REPO_PATH);
@@ -1821,7 +1821,7 @@ ${feedback}
               // Semantic mode: embed query and use cosine similarity
               if (ragMode === 'semantic' && ragIndex[0]?.embedding) {
                 try {
-                  const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+                  const embModel = cfg.get<string>('embeddingModel', 'nomic-embed-text:137m-v1.5-fp16');
                   const embUrl = deriveEmbeddingUrl(apiUrl);
                   const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
                   ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb);
@@ -2041,7 +2041,7 @@ ${feedback}
           }
         } else if (ragMode === 'semantic') {
           try {
-            const embModel = cfg.get<string>('embeddingModel', 'text-embedding-3-small');
+            const embModel = cfg.get<string>('embeddingModel', 'nomic-embed-text:137m-v1.5-fp16');
             await buildSemanticIndex(LOCAL_REPO_PATH, apiUrl, apiKey, embModel);
             const ragIndex = loadRagIndex();
             if (ragIndex.length > 0) {
