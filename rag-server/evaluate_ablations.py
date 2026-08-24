@@ -195,3 +195,142 @@ def run_ablation_2_exercise_filter(
     return {"summary": summary}
 
 
+def run_ablation_3_title_embedding(
+    queries: List[Dict[str, Any]],
+    chunks: List[RagChunk],
+) -> Dict[str, Any]:
+    """Ablation 3: Compare Retrieval with Content-Only vs Title+Content Embedding."""
+    print("\n" + "=" * 80)
+    print("🔬 ABLATION 3: ± Title+Content Concatenation for Embedding")
+    print("=" * 80)
+
+    model_emb = SentenceTransformer("all-MiniLM-L6-v2")
+
+    # Encode with Content Only
+    content_only_texts = [c.content for c in chunks]
+    embs_content_only = model_emb.encode(content_only_texts, show_progress_bar=False, normalize_embeddings=True)
+
+    # Encode with Title + Content
+    title_content_texts = [f"{c.title}\n{c.content}" for c in chunks]
+    embs_title_content = model_emb.encode(title_content_texts, show_progress_bar=False, normalize_embeddings=True)
+
+    results = {
+        "Content-Only Embedding": {"hit@1": [], "hit@3": [], "hit@5": [], "mrr": []},
+        "Title+Content Embedding": {"hit@1": [], "hit@3": [], "hit@5": [], "mrr": []},
+    }
+
+    for q in queries:
+        query_text = f"{q['title']} {q['description']}"
+        q_emb = model_emb.encode([query_text], show_progress_bar=False, normalize_embeddings=True)[0]
+        concepts = q["concepts"]
+        target_lecture = q["source_file"]
+
+        def eval_embs(embs):
+            retrieved = dense_retrieve(q_emb, chunks, embs, top_k=5)
+            hits = []
+            for rank, (c, _) in enumerate(retrieved):
+                is_rel = (target_lecture in c.source) and _chunk_matches_concepts(c, concepts)
+                hits.append(1 if is_rel else 0)
+
+            h1 = 1 if sum(hits[:1]) > 0 else 0
+            h3 = 1 if sum(hits[:3]) > 0 else 0
+            h5 = 1 if sum(hits[:5]) > 0 else 0
+            first_hit = next((r + 1 for r, h in enumerate(hits) if h == 1), 0)
+            mrr = 1.0 / first_hit if first_hit > 0 else 0.0
+            return h1, h3, h5, mrr
+
+        h1_c, h3_c, h5_c, mrr_c = eval_embs(embs_content_only)
+        results["Content-Only Embedding"]["hit@1"].append(h1_c)
+        results["Content-Only Embedding"]["hit@3"].append(h3_c)
+        results["Content-Only Embedding"]["hit@5"].append(h5_c)
+        results["Content-Only Embedding"]["mrr"].append(mrr_c)
+
+        h1_tc, h3_tc, h5_tc, mrr_tc = eval_embs(embs_title_content)
+        results["Title+Content Embedding"]["hit@1"].append(h1_tc)
+        results["Title+Content Embedding"]["hit@3"].append(h3_tc)
+        results["Title+Content Embedding"]["hit@5"].append(h5_tc)
+        results["Title+Content Embedding"]["mrr"].append(mrr_tc)
+
+    summary = {
+        cond: {k: round(float(np.mean(v)) * (100 if "hit" in k else 1), 2 if "hit" in k else 4)
+               for k, v in metrics.items()}
+        for cond, metrics in results.items()
+    }
+    return {"summary": summary}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="CellMate RAG Ablation Suite")
+    parser.add_argument("--api-url", type=str, default=os.environ.get("CELLMATE_API_URL", ""),
+                        help="LLM API endpoint")
+    parser.add_argument("--api-key", type=str, default=os.environ.get("CELLMATE_API_KEY", ""),
+                        help="API key")
+    parser.add_argument("--model", type=str, default=os.environ.get("CELLMATE_MODEL", "gpt-oss:120b"),
+                        help="Model name")
+    parser.add_argument("--sample", type=int, default=0, help="Sample N queries (0 = all)")
+    args = parser.parse_args()
+
+    knowledge_dir = os.path.join(os.path.dirname(__file__), "..", "knowledge")
+    chunks = load_knowledge_base(knowledge_dir)
+    queries = load_benchmark_queries()
+    if args.sample > 0:
+        queries = queries[:args.sample]
+
+    print(f"Loaded {len(chunks)} chunks and {len(queries)} queries.")
+
+    # Base embedding for ablations 1 & 2
+    model_emb = SentenceTransformer("all-MiniLM-L6-v2")
+    chunk_texts = [f"{c.title}\n{c.content}" for c in chunks]
+    chunk_embs = model_emb.encode(chunk_texts, show_progress_bar=False, normalize_embeddings=True)
+
+    # 1. Ablation 3 (Pure IR: Title embedding)
+    res_abl3 = run_ablation_3_title_embedding(queries, chunks)
+
+    # 2. Ablation 2 (Pure IR: Filter exercises)
+    res_abl2 = run_ablation_2_exercise_filter(queries, chunks, chunk_embs)
+
+    # 3. Ablation 1 (LLM Generation: ± RAG) — only run if API credentials provided
+    res_abl1 = None
+    if args.api_url and args.api_key:
+        res_abl1 = run_ablation_1_rag_effect(args.api_url, args.api_key, args.model, queries, chunks, chunk_embs)
+    else:
+        print("\n⚠️ Skipping Ablation 1 (± RAG Generation) because --api-url / --api-key were not provided.")
+
+    all_ablations = {
+        "ablation_1_rag_effect": res_abl1,
+        "ablation_2_exercise_filter": res_abl2,
+        "ablation_3_title_embedding": res_abl3,
+    }
+
+    # Print Summary Tables
+    print("\n" + "=" * 90)
+    print("📊 ABLATION STUDIES SUMMARY TABLE")
+    print("=" * 90)
+
+    if res_abl1:
+        print("\n### Ablation 1: ± RAG Generation Quality")
+        print(f"{'Condition':<25} | {'Faithfulness':<15} | {'Answer Relevancy':<15}")
+        print("-" * 60)
+        for cond, vals in res_abl1["summary"].items():
+            print(f"{cond:<25} | {vals['faithfulness']:>13.4f} | {vals['answer_relevancy']:>15.4f}")
+
+    print("\n### Ablation 2: ± Exercise Filtering (Pre-study Precision)")
+    print(f"{'Condition':<35} | {'Prec@1':<8} | {'Prec@3':<8} | {'Prec@5':<8} | {'MRR':<8}")
+    print("-" * 75)
+    for cond, vals in res_abl2["summary"].items():
+        print(f"{cond:<35} | {vals['prec@1']:>6.2f} | {vals['prec@3']:>6.2f} | {vals['prec@5']:>6.2f} | {vals['mrr']:>6.4f}")
+
+    print("\n### Ablation 3: ± Title+Content Embedding (Retrieval Accuracy)")
+    print(f"{'Condition':<30} | {'Hit@1 (%)':<10} | {'Hit@3 (%)':<10} | {'Hit@5 (%)':<10} | {'MRR':<8}")
+    print("-" * 75)
+    for cond, vals in res_abl3["summary"].items():
+        print(f"{cond:<30} | {vals['hit@1']:>8.1f}% | {vals['hit@3']:>8.1f}% | {vals['hit@5']:>8.1f}% | {vals['mrr']:>6.4f}")
+
+    out_file = os.path.join(os.path.dirname(__file__), "ablation_results.json")
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump(all_ablations, f, indent=2)
+    print(f"\nAll ablation results saved to {out_file}\n")
+
+
+if __name__ == "__main__":
+    main()
