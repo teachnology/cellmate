@@ -1,0 +1,444 @@
+{
+  "ablation_1_rag_effect": {
+    "summary": {
+      "No-RAG": {
+        "faithfulness": 0.6125,
+        "answer_relevancy": 0.7153
+      },
+      "With-RAG (Dense)": {
+        "faithfulness": 0.9875,
+        "answer_relevancy": 0.6583
+      }
+    },
+    "details": [
+      {
+        "exercise_id": "ex1_11_num_digits",
+        "no_rag": {
+          "faithfulness": 0.0,
+          "relevancy": 1.0
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.2
+        }
+      },
+      {
+        "exercise_id": "ex1_13_odd_numbers",
+        "no_rag": {
+          "faithfulness": 0.2,
+          "relevancy": 0.9
+        },
+        "with_rag": {
+          "faithfulness": 0.85,
+          "relevancy": 0.3
+        }
+      },
+      {
+        "exercise_id": "ex1_14_even_numbers",
+        "no_rag": {
+          "faithfulness": 0.4,
+          "relevancy": 0.8
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        }
+      },
+      {
+        "exercise_id": "ex1_15_my_sum",
+        "no_rag": {
+          "faithfulness": 0.6,
+          "relevancy": 1.0
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.9
+        }
+      },
+      {
+        "exercise_id": "ex1_16_distance",
+        "no_rag": {
+          "faithfulness": 0.8,
+          "relevancy": 0.4
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.0
+        }
+      },
+      {
+        "exercise_id": "ex1_17_my_cumsum",
+        "no_rag": {
+          "faithfulness": 0.9,
+          "relevancy": 0.6
+        },
+        "with_rag": {
+          "faithfulness": 0.9,
+          "relevancy": 0.8
+        }
+      },
+      {
+        "exercise_id": "ex1_18_compute_heights",
+        "no_rag": {
+          "faithfulness": 0.3,
+          "relevancy": 0.2
+        },
+        "with_rag": {
+          "faithfulness": 0.8,
+          "relevancy": 0.1
+        }
+      },
+      {
+        "exercise_id": "ex1_19_calculate_pi",
+        "no_rag": {
+          "faithfulness": 0.1,
+          "relevancy": 0.9
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.4
+        }
+      },
+      {
+        "exercise_id": "ex1_7_gaussian",
+        "no_rag": {
+          "faithfulness": 0.4,
+          "relevancy": 0.6
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.4
+        }
+      },
+      {
+        "exercise_id": "ex1_9_period",
+        "no_rag": {
+          "faithfulness": 0.9,
+          "relevancy": 0.5
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.5
+        }
+      },
+      {
+        "exercise_id": "ex2_10_multiply",
+        "no_rag": {
+          "faithfulness": 0.8,
+          "relevancy": 0.2
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.2
+        }
+      },
+      {
+        "exercise_id": "ex2_11_f_cubic",
+        "no_rag": {
+          "faithfulness": 0.8,
+          "relevancy": 0.5
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.6
+        }
+      },
+      {
+        "exercise_id": "ex2_12_f_mult",
+        "no_rag": {
+          "faithfulness": 0.4,
+          "relevancy": 0.2
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.3
+        }
+      },
+      {
+        "exercise_id": "ex2_13_odd_bits",
+        "no_rag": {
+          "faithfulness": 0.8,
+          "relevancy": 1.0
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        }
+      },
+      {
+        "exercise_id": "ex2_1_mult",
+        "no_rag": {
+          "faithfulness": 0.8,
+          "relevancy": 0.9
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.6
+        }
+      },
+      {
+        "exercise_id": "ex2_3_heaviside",
+        "no_rag": {
+          "faithfulness": 0.7,
+          "relevancy": 0.9
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        }
+      },
+      {
+        "exercise_id": "ex2_4_my_factorial",
+        "no_rag": {
+          "faithfulness": 0.75,
+          "relevancy": 0.95
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.9
+        }
+      },
+      {
+        "exercise_id": "ex2_5_path_length",
+        "no_rag": {
+          "faithfulness": 0.8,
+          "relevancy": 0.7
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        }
+      },
+      {
+        "exercise_id": "ex2_6_approx_pi",
+        "no_rag": {
+          "faithfulness": 0.2,
+          "relevancy": 0.3
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.4
+        }
+      },
+      {
+        "exercise_id": "ex2_7_prime_list",
+        "no_rag": {
+          "faithfulness": 0.0,
+          "relevancy": 0.3
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.2
+        }
+      },
+      {
+        "exercise_id": "ex2_8_h",
+        "no_rag": {
+          "faithfulness": 0.9,
+          "relevancy": 0.4
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.8
+        }
+      },
+      {
+        "exercise_id": "ex2_9_w_wbits",
+        "no_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.4
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        }
+      },
+      {
+        "exercise_id": "ex3_4_displacement",
+        "no_rag": {
+          "faithfulness": 0.6,
+          "relevancy": 0.8
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.6
+        }
+      },
+      {
+        "exercise_id": "ex3_5_my_factorial",
+        "no_rag": {
+          "faithfulness": 0.4,
+          "relevancy": 0.9
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.8
+        }
+      },
+      {
+        "exercise_id": "ex3_6_wave_speed",
+        "no_rag": {
+          "faithfulness": 0.8,
+          "relevancy": 1.0
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.5
+        }
+      },
+      {
+        "exercise_id": "ex3_8_read_temp_density",
+        "no_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.9
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        }
+      },
+      {
+        "exercise_id": "ex3_9_compute_velocity",
+        "no_rag": {
+          "faithfulness": 0.0,
+          "relevancy": 1.0
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.2
+        }
+      },
+      {
+        "exercise_id": "ex4_1_read_constants",
+        "no_rag": {
+          "faithfulness": 0.9,
+          "relevancy": 0.9
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        }
+      },
+      {
+        "exercise_id": "ex4_2_reverse_dict",
+        "no_rag": {
+          "faithfulness": 0.7,
+          "relevancy": 0.9
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        }
+      },
+      {
+        "exercise_id": "ex4_3_triangle_area",
+        "no_rag": {
+          "faithfulness": 0.2,
+          "relevancy": 0.4
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.9
+        }
+      },
+      {
+        "exercise_id": "ex4_4_read_densities",
+        "no_rag": {
+          "faithfulness": 0.9,
+          "relevancy": 0.7
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.4
+        }
+      },
+      {
+        "exercise_id": "ex4_5_class_F",
+        "no_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        }
+      },
+      {
+        "exercise_id": "ex4_6_simple_class",
+        "no_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.9
+        }
+      },
+      {
+        "exercise_id": "ex4_7_account_transactions",
+        "no_rag": {
+          "faithfulness": 0.8,
+          "relevancy": 0.7
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.9
+        }
+      },
+      {
+        "exercise_id": "ex4_8_line_class",
+        "no_rag": {
+          "faithfulness": 0.9,
+          "relevancy": 1.0
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 1.0
+        }
+      },
+      {
+        "exercise_id": "ex4_9_quadratic_class",
+        "no_rag": {
+          "faithfulness": 0.3,
+          "relevancy": 0.9
+        },
+        "with_rag": {
+          "faithfulness": 1.0,
+          "relevancy": 0.9
+        }
+      }
+    ]
+  },
+  "ablation_2_exercise_filter": {
+    "summary": {
+      "Unfiltered (excludeExercises=False)": {
+        "prec@1": 0.0556,
+        "prec@3": 0.1296,
+        "prec@5": 0.1389,
+        "mrr": 0.1838
+      },
+      "Filtered (excludeExercises=True)": {
+        "prec@1": 0.25,
+        "prec@3": 0.2685,
+        "prec@5": 0.2556,
+        "mrr": 0.4097
+      }
+    }
+  },
+  "ablation_3_title_embedding": {
+    "summary": {
+      "Content-Only Embedding": {
+        "hit@1": 83.33,
+        "hit@3": 91.67,
+        "hit@5": 91.67,
+        "mrr": 0.875
+      },
+      "Title+Content Embedding": {
+        "hit@1": 86.11,
+        "hit@3": 91.67,
+        "hit@5": 91.67,
+        "mrr": 0.8889
+      }
+    }
+  }
+}
