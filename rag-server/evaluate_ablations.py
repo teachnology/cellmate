@@ -28,12 +28,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 from evaluate_rag import (
     RagChunk, load_knowledge_base, load_benchmark_queries,
     bm25_lite_retrieve, dense_retrieve, hybrid_rrf_retrieve,
-    filter_teaching_chunks, _chunk_matches_concepts, tokenize, hash_id
+    filter_teaching_chunks, _chunk_matches_concepts, tokenize, hash_id,
+    EXERCISE_CONCEPTS
 )
 from evaluate_ragas_consolidated import (
-    call_llm, parse_llm_json, safe_float, make_engines,
-    PRESTUDY_STUDENT_PROMPT, PRESTUDY_JUDGE_PROMPT,
-    FEEDBACK_STUDENT_PROMPT, FEEDBACK_JUDGE_PROMPT
+    call_llm, parse_llm_json, safe_float,
+    PRESTUDY_TEMPLATE, RAGAS_COMBINED_JUDGE_PROMPT
 )
 
 
@@ -56,21 +56,22 @@ def run_ablation_1_rag_effect(
     }
     records = []
 
+    # Filter teaching chunks once
+    teaching_chunks = filter_teaching_chunks(chunks)
+    teaching_indices = [i for i, c in enumerate(chunks) if not re.match(r"^Exercise\s+\d", c.title, re.IGNORECASE)]
+    teaching_embs = chunk_embs[teaching_indices]
+    model_emb = SentenceTransformer("all-MiniLM-L6-v2")
+
     for idx, q in enumerate(queries):
-        ex_id = q["exercise_id"]
+        ex_id = q["id"]
         title = q["title"]
-        desc = q["description"]
-        concepts = q["concepts"]
+        desc = q.get("desc", "")
+        concepts = EXERCISE_CONCEPTS.get(ex_id, ["programming concepts", "Python syntax", "problem solving"])
+        query_text = q.get("query_prestudy") or f"{title}\n{desc}"
 
         print(f"  [{idx+1}/{len(queries)}] {ex_id}: {title}...", flush=True)
 
         # 1. Retrieve RAG context (Dense Embedding)
-        query_text = f"{title} {desc}"
-        teaching_chunks = filter_teaching_chunks(chunks)
-        teaching_indices = [i for i, c in enumerate(chunks) if not c.title.startswith("Exercise")]
-        teaching_embs = chunk_embs[teaching_indices]
-
-        model_emb = SentenceTransformer("all-MiniLM-L6-v2")
         q_emb = model_emb.encode([query_text], show_progress_bar=False, normalize_embeddings=True)[0]
         retrieved = dense_retrieve(q_emb, teaching_chunks, teaching_embs, top_k=3)
 
@@ -78,12 +79,15 @@ def run_ablation_1_rag_effect(
         chunks_with_ranks = "\n\n".join([f"[Chunk Rank {r+1}] ({c.source} | {c.title}):\n{c.content}" for r, (c, _) in enumerate(retrieved)])
 
         # A. Condition 1: No-RAG (Context is explicitly empty)
-        prompt_no_rag = PRESTUDY_STUDENT_PROMPT.format(
-            title=title, description=desc, context="(No course materials provided. Answer from general knowledge.)"
+        prompt_no_rag = PRESTUDY_TEMPLATE.format(
+            exercise_id=ex_id,
+            title=title,
+            description=desc,
+            rag_context="(No course materials provided. Answer from general knowledge.)"
         )
         ans_no_rag = call_llm(prompt_no_rag, api_url, api_key, model, temperature=0.0)
 
-        judge_prompt_no_rag = PRESTUDY_JUDGE_PROMPT.format(
+        judge_prompt_no_rag = RAGAS_COMBINED_JUDGE_PROMPT.format(
             exercise_id=ex_id, title=title, description=desc, concepts=", ".join(concepts),
             chunks_with_ranks=chunks_with_ranks, question=query_text, answer=ans_no_rag
         )
@@ -95,12 +99,15 @@ def run_ablation_1_rag_effect(
         results["No-RAG"]["answer_relevancy"].append(r_no_rag)
 
         # B. Condition 2: With-RAG
-        prompt_with_rag = PRESTUDY_STUDENT_PROMPT.format(
-            title=title, description=desc, context=context_with_rag
+        prompt_with_rag = PRESTUDY_TEMPLATE.format(
+            exercise_id=ex_id,
+            title=title,
+            description=desc,
+            rag_context=context_with_rag
         )
         ans_with_rag = call_llm(prompt_with_rag, api_url, api_key, model, temperature=0.0)
 
-        judge_prompt_with_rag = PRESTUDY_JUDGE_PROMPT.format(
+        judge_prompt_with_rag = RAGAS_COMBINED_JUDGE_PROMPT.format(
             exercise_id=ex_id, title=title, description=desc, concepts=", ".join(concepts),
             chunks_with_ranks=chunks_with_ranks, question=query_text, answer=ans_with_rag
         )
@@ -153,10 +160,14 @@ def run_ablation_2_exercise_filter(
     filtered_embs = chunk_embs[filtered_indices]
 
     for q in queries:
-        query_text = f"{q['title']} {q['description']}"
+        ex_id = q["id"]
+        title = q["title"]
+        desc = q.get("desc", "")
+        concepts = EXERCISE_CONCEPTS.get(ex_id, ["programming concepts", "Python syntax", "problem solving"])
+        query_text = q.get("query_prestudy") or f"{title}\n{desc}"
+        target_lecture = q.get("gt_lecture", "")
+
         q_emb = model_emb.encode([query_text], show_progress_bar=False, normalize_embeddings=True)[0]
-        concepts = q["concepts"]
-        target_lecture = q["source_file"]
 
         def eval_pool(pool, embs):
             retrieved = dense_retrieve(q_emb, pool, embs, top_k=5)
@@ -220,10 +231,14 @@ def run_ablation_3_title_embedding(
     }
 
     for q in queries:
-        query_text = f"{q['title']} {q['description']}"
+        ex_id = q["id"]
+        title = q["title"]
+        desc = q.get("desc", "")
+        concepts = EXERCISE_CONCEPTS.get(ex_id, ["programming concepts", "Python syntax", "problem solving"])
+        query_text = q.get("query_prestudy") or f"{title}\n{desc}"
+        target_lecture = q.get("gt_lecture", "")
+
         q_emb = model_emb.encode([query_text], show_progress_bar=False, normalize_embeddings=True)[0]
-        concepts = q["concepts"]
-        target_lecture = q["source_file"]
 
         def eval_embs(embs):
             retrieved = dense_retrieve(q_emb, chunks, embs, top_k=5)
@@ -270,9 +285,15 @@ def main():
     parser.add_argument("--sample", type=int, default=0, help="Sample N queries (0 = all)")
     args = parser.parse_args()
 
-    knowledge_dir = os.path.join(os.path.dirname(__file__), "..", "knowledge")
+    repo_path = os.environ.get("PROMPTFOLIO_PATH", "/Users/zq425/Desktop/promptfolio")
+    if not os.path.exists(repo_path):
+        repo_path = "/tmp/promptfolio_repo"
+    if not os.path.exists(repo_path):
+        repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+    knowledge_dir = os.path.join(repo_path, "knowledge")
     chunks = load_knowledge_base(knowledge_dir)
-    queries = load_benchmark_queries()
+    queries = load_benchmark_queries(repo_path)
     if args.sample > 0:
         queries = queries[:args.sample]
 
