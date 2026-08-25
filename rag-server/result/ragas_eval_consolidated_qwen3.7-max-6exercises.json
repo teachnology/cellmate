@@ -1,0 +1,730 @@
+{
+  "summary": {
+    "Pre-study Guide": {
+      "BM25-lite (Keyword)": {
+        "faithfulness": 0.3333,
+        "answer_relevancy": 0.8333,
+        "context_recall": 0.25,
+        "context_precision": 0.3167
+      },
+      "Dense Embedding (ChromaDB)": {
+        "faithfulness": 0.7,
+        "answer_relevancy": 0.8,
+        "context_recall": 0.55,
+        "context_precision": 0.5833
+      },
+      "Hybrid (BM25 + Dense RRF)": {
+        "faithfulness": 0.4917,
+        "answer_relevancy": 0.875,
+        "context_recall": 0.5217,
+        "context_precision": 0.5667
+      }
+    },
+    "AI Feedback": {
+      "BM25-lite (Keyword)": {
+        "faithfulness": 0.95,
+        "answer_relevancy": 1.0,
+        "context_recall": 0.8,
+        "context_precision": 0.6667
+      },
+      "Dense Embedding (ChromaDB)": {
+        "faithfulness": 0.9667,
+        "answer_relevancy": 1.0,
+        "context_recall": 0.8883,
+        "context_precision": 0.8667
+      },
+      "Hybrid (BM25 + Dense RRF)": {
+        "faithfulness": 1.0,
+        "answer_relevancy": 1.0,
+        "context_recall": 0.95,
+        "context_precision": 0.95
+      }
+    }
+  },
+  "detailed": [
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 0.1,
+      "answer_relevancy": 0.9,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Calculate pi using the Gregory-Leibniz series\n\n### \ud83d\udd11 Core Concepts\n1. **List Comprehensions** \u2014 The syntax `[expression for item in iterable]` efficiently creates lists. The lect",
+      "context_titles": [
+        "Vectors and arrays",
+        "Python dictionaries",
+        "Reading data from a plain text file",
+        "Harder kata",
+        "Introduction"
+      ],
+      "elapsed_seconds": 50.2
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.9,
+      "context_recall": 0.2,
+      "context_precision": 0.1,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Store odd numbers in a list\n\n### \ud83d\udd11 Core Concepts\n1. **`while`-loops** \u2014 The lecture demonstrates that a `while` loop requires initializing a counter before the loop and updating ",
+      "context_titles": [
+        "Harder kata",
+        "Introduction",
+        "`for`-loops",
+        "String manipulation",
+        "Vectors and arrays"
+      ],
+      "elapsed_seconds": 43.3
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 0.9,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.7,
+      "context_precision": 0.8,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Compute the length of a path from coordinates\n\n### \ud83d\udd11 Core Concepts\n1. **Functions** \u2014 Define your solution using the `def` keyword, accepting `x` and `y` as arguments. Use the `r",
+      "context_titles": [
+        "Example 2: Building Triangles",
+        "Vectors and arrays",
+        "Functions",
+        "Reading data from a plain text file",
+        "Harder kata"
+      ],
+      "elapsed_seconds": 50.9
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 0.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Implement the Heaviside step function\n\n### \ud83d\udd11 Core Concepts\n1. **Conditional Statements (`if`/`else`)** \u2014 The lectures demonstrate using a set of `if`, `elif`, and `else` statemen",
+      "context_titles": [
+        "Introduction",
+        "Example 2: Building Triangles",
+        "Example 2: Building Triangles",
+        "Python dictionaries",
+        "Harder kata"
+      ],
+      "elapsed_seconds": 35.3
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 0.2,
+      "answer_relevancy": 0.2,
+      "context_recall": 0.1,
+      "context_precision": 0.2,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Multiply all elements in a list by n\n\n### \ud83d\udd11 Core Concepts\n1. **Iterating over list indices** \u2014 To change all numbers in a list, use a `for` loop over indices (`for i in range(len",
+      "context_titles": [
+        "Introduction",
+        "Python dictionaries",
+        "Harder kata",
+        "Learning objectives:",
+        "Introduction"
+      ],
+      "elapsed_seconds": 41.3
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 0.8,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.5,
+      "context_precision": 0.8,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Position of the ball in a vertical motion\n\n### \ud83d\udd11 Core Concepts\n1. **Function Signatures and Keyword Arguments** \u2014 Functions are defined using `def` followed by a name and parenth",
+      "context_titles": [
+        "Functions",
+        "Programming a mathematical formula",
+        "Adding comments to code",
+        "Harder kata",
+        "String manipulation"
+      ],
+      "elapsed_seconds": 55.2
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 0.5,
+      "answer_relevancy": 0.7,
+      "context_recall": 0.2,
+      "context_precision": 0.5,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Calculate pi using the Gregory-Leibniz series\n\n### \ud83d\udd11 Core Concepts\n1. **Standard Mathematical Functions** \u2014 To use the mathematical constant $\\pi$, you must import it from Python",
+      "context_titles": [
+        "The `if` construct",
+        "Standard mathematical functions",
+        "Lists",
+        "Generalised array indexing",
+        "2D arrays"
+      ],
+      "elapsed_seconds": 53.6
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 0.4,
+      "answer_relevancy": 0.9,
+      "context_recall": 0.3,
+      "context_precision": 0.2,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Store odd numbers in a list\n\n### \ud83d\udd11 Core Concepts\n1. **List Initialization and `append`** \u2014 The \"Lists\" section demonstrates collecting values in a single variable. Initialize an ",
+      "context_titles": [
+        "Generalised array indexing",
+        "Lists",
+        "`enumerate` built-in",
+        "Introduction",
+        "Harder kata"
+      ],
+      "elapsed_seconds": 58.9
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 0.9,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.8,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Compute the length of a path from coordinates\n\n### \ud83d\udd11 Core Concepts\n1. **Traversing multiple lists (`zip`)** \u2014 The `zip()` function allows you to loop over elements in multiple li",
+      "context_titles": [
+        "Example 2: Building Triangles",
+        "Vectors and arrays",
+        "Traversing multiple lists simultaneously: `zip(list1, list2, ...)`",
+        "Functions",
+        "List comprehensions"
+      ],
+      "elapsed_seconds": 52.4
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 0.8,
+      "answer_relevancy": 0.9,
+      "context_recall": 0.7,
+      "context_precision": 0.6,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Implement the Heaviside step function\n\n### \ud83d\udd11 Core Concepts\n1. **Writing your own function** \u2014 Define your function using the `def` keyword (e.g., `def f(x):`) to encapsulate math",
+      "context_titles": [
+        "Learning objectives:",
+        "The `if` construct",
+        "Generalised array indexing",
+        "Boolean expressions",
+        "Adding comments to code"
+      ],
+      "elapsed_seconds": 56.9
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 0.8,
+      "answer_relevancy": 0.6,
+      "context_recall": 0.8,
+      "context_precision": 0.6,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Multiply all elements in a list by n\n\n### \ud83d\udd11 Core Concepts\n1. **Modifying List Elements** \u2014 To change elements in place, iterate over indices using `for i in range(len(v)):` and u",
+      "context_titles": [
+        "Learning objectives:",
+        "How vectorised functions work",
+        "Vectors and arrays",
+        "List comprehensions",
+        "`@` operator"
+      ],
+      "elapsed_seconds": 58.7
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 0.8,
+      "answer_relevancy": 0.7,
+      "context_recall": 0.3,
+      "context_precision": 0.8,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Position of the ball in a vertical motion\n\n### \ud83d\udd11 Core Concepts\n1. **Programming Mathematical Formulas** \u2014 Translate equations into Python using explicit operators. Use `*` for mu",
+      "context_titles": [
+        "Programming a mathematical formula",
+        "Adding comments to code",
+        "Storing numbers in variables",
+        "Functions",
+        "Representing a function by a class"
+      ],
+      "elapsed_seconds": 54.3
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 0.3,
+      "answer_relevancy": 0.9,
+      "context_recall": 0.2,
+      "context_precision": 0.5,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Calculate pi using the Gregory-Leibniz series\n\n### \ud83d\udd11 Core Concepts\n1. **List Comprehensions** \u2014 You can generate sequences efficiently using the syntax `[expression for item in i",
+      "context_titles": [
+        "Vectors and arrays",
+        "The `if` construct",
+        "Python dictionaries",
+        "Standard mathematical functions",
+        "Reading data from a plain text file"
+      ],
+      "elapsed_seconds": 57.7
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 0.2,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.3,
+      "context_precision": 0.2,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Store odd numbers in a list\n\n### \ud83d\udd11 Core Concepts\n1. **`while`-loops** \u2014 Unlike `for`-loops, `while`-loops require manually initializing a counter before the loop, defining a cont",
+      "context_titles": [
+        "Harder kata",
+        "Introduction",
+        "Generalised array indexing",
+        "Lists",
+        "`for`-loops"
+      ],
+      "elapsed_seconds": 46.2
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 0.85,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.8,
+      "context_precision": 0.9,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Compute the length of a path from coordinates\n\n### \ud83d\udd11 Core Concepts\n1. **Functions** \u2014 Use the `def` keyword to define `path_length(x, y)`. Pass the coordinate sequences as argume",
+      "context_titles": [
+        "Example 2: Building Triangles",
+        "Functions",
+        "Vectors and arrays",
+        "Example 2: Building Triangles",
+        "Vectors and arrays"
+      ],
+      "elapsed_seconds": 52.1
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 0.5,
+      "answer_relevancy": 0.9,
+      "context_recall": 0.7,
+      "context_precision": 0.5,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Implement the Heaviside step function\n\n### \ud83d\udd11 Core Concepts\n1. **Function Definition** \u2014 Use the `def` keyword to define your function (e.g., `def heaviside(x):`) and the `return`",
+      "context_titles": [
+        "The `if` construct",
+        "Introduction",
+        "Learning objectives:",
+        "Example 2: Building Triangles",
+        "Example 2: Building Triangles"
+      ],
+      "elapsed_seconds": 63.9
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 0.4,
+      "answer_relevancy": 0.7,
+      "context_recall": 0.8,
+      "context_precision": 0.6,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Multiply all elements in a list by n\n\n### \ud83d\udd11 Core Concepts\n1. **Iterating over Indices** \u2014 To modify a standard Python list, use a `for` loop over its indices using `for i in rang",
+      "context_titles": [
+        "Learning objectives:",
+        "Vectors and arrays",
+        "Introduction",
+        "Python dictionaries",
+        "How vectorised functions work"
+      ],
+      "elapsed_seconds": 49.4
+    },
+    {
+      "scenario": "Pre-study Guide",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 0.7,
+      "answer_relevancy": 0.75,
+      "context_recall": 0.33,
+      "context_precision": 0.7,
+      "answer_preview": "## \ud83d\udcd6 Pre-study Guide: Position of the ball in a vertical motion\n\n### \ud83d\udd11 Core Concepts\n1. **Programming Mathematical Formulas** \u2014 Translate equations into Python using explicit operators. Use `*` for mu",
+      "context_titles": [
+        "Programming a mathematical formula",
+        "Functions",
+        "Adding comments to code",
+        "Storing numbers in variables",
+        "Representing a function by a class"
+      ],
+      "elapsed_seconds": 50.9
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 0.9,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.7,
+      "context_precision": 0.2,
+      "answer_preview": "**Classification**: BROKEN\n\n**Hint**:\nGreat start, but your function is currently a stub and missing the required parameter `n`. Update the signature to `def calculate_pi(n):`. Follow the exercise ste",
+      "context_titles": [
+        "Exercise 1.19: Calculate $\\pi$",
+        "Introduction",
+        "Harder kata",
+        "Vectors and arrays",
+        "Storing numbers in variables"
+      ],
+      "elapsed_seconds": 29.4
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_preview": "**Classification**: BROKEN\n\n**Feedback**:\nYour function is currently a stub and missing the required parameter `n`. \n\nTo solve this:\n1. Update the signature to `def odd_numbers(n):`.\n2. Initialize an ",
+      "context_titles": [
+        "Exercise 1.13: Store odd numbers in a list",
+        "Harder kata",
+        "Exercise 1.14: Create a list of even numbers ranging from 0 to $n$ using a `for` loop.",
+        "Introduction",
+        "Vectors and arrays"
+      ],
+      "elapsed_seconds": 24.5
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 0.8,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.8,
+      "context_precision": 0.6,
+      "answer_preview": "**Classification**: FAILING\n\n**Hint**: Your code is currently just a stub and missing the required `x` and `y` parameters! Update your definition to `def path_length(x, y):`. To calculate the total le",
+      "context_titles": [
+        "Exercise 2.5: Compute the length of a path",
+        "Exercise 4.8: Make a class for straight lines",
+        "Introduction",
+        "Harder kata",
+        "Exercise 4.7: Extend a class"
+      ],
+      "elapsed_seconds": 28.1
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.3,
+      "answer_preview": "**Classification:** BROKEN\n\n**Feedback:**\nGreat start! However, your function signature is missing the input parameter. The problem asks for `heaviside(x)`, so be sure to include `x` in the parenthese",
+      "context_titles": [
+        "Introduction",
+        "Introduction",
+        "Exercise 2.3: Express a step (Heaviside) function as a Python function",
+        "Harder kata",
+        "Introduction"
+      ],
+      "elapsed_seconds": 28.1
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_preview": "**Classification**: BROKEN\n\n**Feedback**:\nGreat start! First, update your function signature to accept the required inputs: `def mult(vector, n):`. \n\nTo solve this, create an empty list to store your ",
+      "context_titles": [
+        "Exercise 2.1: Create a list and modify it.",
+        "Harder kata",
+        "Introduction",
+        "Introduction",
+        "Introduction"
+      ],
+      "elapsed_seconds": 29.3
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "BM25-lite (Keyword)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.3,
+      "context_precision": 0.9,
+      "answer_preview": "**Classification**: BROKEN\n\n**Hint**: Great start, but your function is currently just a stub! First, update the function signature to include the parameters `t_start`, `t_end`, `n`, and the keyword a",
+      "context_titles": [
+        "Exercise 1.16: Position of the ball in a vertical motion.",
+        "Functions",
+        "Programming a mathematical formula",
+        "Adding comments to code",
+        "Exercise 3.4: Test more in the program"
+      ],
+      "elapsed_seconds": 31.3
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_preview": "**Classification**: BROKEN\n\n**Feedback**:\nYour code is currently an empty stub and missing the required parameter `n`. Update the signature to `calculate_pi(n)`. Follow the four steps in Exercise 1.19",
+      "context_titles": [
+        "Exercise 1.19: Calculate $\\pi$",
+        "Exercise 1.15: Implement the sum function",
+        "Exercise 2.6: Approximate $\\pi$",
+        "Exercise 1.17: Cumulative sum",
+        "Standard mathematical functions"
+      ],
+      "elapsed_seconds": 26.9
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_preview": "**Classification**: BROKEN\n\n**Feedback**:\nGood effort, but the function is currently empty! First, add the parameter `n` to your definition: `def odd_numbers(n):`. \n\nNext, initialize an empty list and",
+      "context_titles": [
+        "Exercise 1.13: Store odd numbers in a list",
+        "Exercise 1.14: Create a list of even numbers ranging from 0 to $n$ using a `for` loop.",
+        "Exercise 2.13: 2D array slicing",
+        "Lists",
+        "Exercise 1.19: Calculate $\\pi$"
+      ],
+      "elapsed_seconds": 31.8
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_preview": "**Classification**: BROKEN\n\n**Hint**: Your code is currently just a stub! First, update the signature to `def path_length(x, y):` to accept the coordinate lists. Initialize a variable for the total le",
+      "context_titles": [
+        "Exercise 2.5: Compute the length of a path",
+        "Exercise 1.2: Convert from metres to British length units",
+        "Exercise 1.16: Position of the ball in a vertical motion.",
+        "Exercise 2.8: Fill lists and arrays with function values",
+        "Exercise 4.8: Make a class for straight lines"
+      ],
+      "elapsed_seconds": 27.8
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 0.8,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.8,
+      "answer_preview": "**Classification**: BROKEN\n\n**Feedback**:\nGreat start! Currently, your function doesn't accept any arguments and only contains `pass`. First, update the definition to accept the parameter `x`: `def he",
+      "context_titles": [
+        "Exercise 2.3: Express a step (Heaviside) function as a Python function",
+        "Learning objectives:",
+        "Equality vs. identity",
+        "The `if` construct",
+        "Exercise 1.10: Values of boolean expressions"
+      ],
+      "elapsed_seconds": 30.4
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_preview": "**Classification:** FAILING\n\n**Hint:**\nGreat start! First, update your function signature to accept the required arguments: `def mult(vector, n):`. Next, review the course materials on modifying list ",
+      "context_titles": [
+        "Exercise 2.1: Create a list and modify it.",
+        "Learning objectives:",
+        "Exercise 1.14: Create a list of even numbers ranging from 0 to $n$ using a `for` loop.",
+        "Exercise 1.15: Implement the sum function",
+        "Learning objectives:"
+      ],
+      "elapsed_seconds": 26.1
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Dense Embedding (ChromaDB)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.33,
+      "context_precision": 0.4,
+      "answer_preview": "**Classification:** FAILING\n\n**Feedback:**\nYour code is currently just a stub! To fix this, update your function signature to include the required parameters: `t_start`, `t_end`, `n`, `v0=6.0`, and `g",
+      "context_titles": [
+        "Exercise 1.16: Position of the ball in a vertical motion.",
+        "Adding comments to code",
+        "Exercise 3.4: Test more in the program",
+        "Functions",
+        "Exercise 1.18: Bouncing ball"
+      ],
+      "elapsed_seconds": 32.5
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex1_19_calculate_pi",
+      "title": "Calculate pi using the Gregory-Leibniz series",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.9,
+      "context_precision": 0.8,
+      "answer_preview": "**Classification**: BROKEN\n\n**Feedback**:\nYour function is currently empty and missing the `n` parameter! Update the signature to `def calculate_pi(n):`. \n\nFollow the four steps from Exercise 1.19 usi",
+      "context_titles": [
+        "Exercise 1.19: Calculate $\\pi$",
+        "Exercise 2.6: Approximate $\\pi$",
+        "Introduction",
+        "Exercise 1.15: Implement the sum function",
+        "Harder kata"
+      ],
+      "elapsed_seconds": 36.2
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex1_13_odd_numbers",
+      "title": "Store odd numbers in a list",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_preview": "**Classification**: BROKEN\n\n**Feedback**:\nGreat start! First, update your function definition to include the parameter `n`: `def odd_numbers(n):`. Next, initialize an empty list and a counter starting",
+      "context_titles": [
+        "Exercise 1.13: Store odd numbers in a list",
+        "Exercise 1.14: Create a list of even numbers ranging from 0 to $n$ using a `for` loop.",
+        "Exercise 1.17: Cumulative sum",
+        "Harder kata",
+        "Exercise 2.13: 2D array slicing"
+      ],
+      "elapsed_seconds": 30.1
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_5_path_length",
+      "title": "Compute the length of a path from coordinates",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_preview": "**Classification**: BROKEN\n\n**Feedback**:\nGreat start! First, update your function signature to accept the coordinate lists: `def path_length(x, y):`. Next, initialize a total length variable to zero.",
+      "context_titles": [
+        "Exercise 2.5: Compute the length of a path",
+        "Exercise 4.8: Make a class for straight lines",
+        "Exercise 1.2: Convert from metres to British length units",
+        "Exercise 2.6: Approximate $\\pi$",
+        "Introduction"
+      ],
+      "elapsed_seconds": 32.9
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_3_heaviside",
+      "title": "Implement the Heaviside step function",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_preview": "**Classification**: BROKEN\n\n**Feedback**:\nGreat start! First, your function needs to accept an input, so update the signature to `def heaviside(x):`. Next, use an `if` statement to evaluate the boolea",
+      "context_titles": [
+        "Exercise 2.3: Express a step (Heaviside) function as a Python function",
+        "Exercise 3.4: Test more in the program",
+        "Introduction",
+        "Introduction",
+        "Learning objectives:"
+      ],
+      "elapsed_seconds": 27.1
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex2_1_mult",
+      "title": "Multiply all elements in a list by n",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_preview": "**Classification**: BROKEN\n\n**Feedback**:\nGreat start! First, update your function signature to accept the required arguments: `def mult(vector, n):`. \n\nNext, create an empty list to store your result",
+      "context_titles": [
+        "Exercise 2.1: Create a list and modify it.",
+        "Introduction",
+        "Harder kata",
+        "Learning objectives:",
+        "Introduction"
+      ],
+      "elapsed_seconds": 24.9
+    },
+    {
+      "scenario": "AI Feedback",
+      "engine": "Hybrid (BM25 + Dense RRF)",
+      "exercise_id": "ex1_16_distance",
+      "title": "Position of the ball in a vertical motion",
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_recall": 0.8,
+      "context_precision": 0.9,
+      "answer_preview": "**Classification**: BROKEN\n\nYou're off to a start, but the function needs its parameters and logic! First, update the signature to include `t_start`, `t_end`, `n`, and keyword arguments `v0=6.0`, `g=9",
+      "context_titles": [
+        "Exercise 1.16: Position of the ball in a vertical motion.",
+        "Functions",
+        "Adding comments to code",
+        "Exercise 3.4: Test more in the program",
+        "Programming a mathematical formula"
+      ],
+      "elapsed_seconds": 31.1
+    }
+  ]
+}
