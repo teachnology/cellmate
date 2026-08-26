@@ -128,7 +128,7 @@ def plot_fig1_ir_benchmark():
                             ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
     axes[0].legend(loc='lower center', bbox_to_anchor=(0.5, 1.15), frameon=True, ncol=3)
-    fig.suptitle(f'Figure 1: Information Retrieval Accuracy Across Query Modalities (N = 36, {model_name})', fontweight='bold', y=1.01)
+    fig.suptitle(f'Figure: Information Retrieval Accuracy Across Query Modalities (N = 36, {model_name})', fontweight='bold', y=1.01)
     plt.tight_layout()
     out_path = os.path.join(FIG_DIR, f'fig1_ir_benchmark_{model_name}.png')
     plt.savefig(out_path, bbox_inches='tight')
@@ -200,7 +200,7 @@ def plot_fig2_ragas_evaluation():
                 ax.set_ylabel('RAGAs Metric Score [0.0, 1.0]')
 
     axes[0, 0].legend(loc='upper right', frameon=True)
-    fig.suptitle(f'Figure 2: End-to-End Generative Evaluation via RAGAs (N = 6, {model_name})', fontweight='bold', y=1.01)
+    fig.suptitle(f'Figure: End-to-End Generative Evaluation via RAGAs (N = 6, {model_name})', fontweight='bold', y=1.01)
     plt.tight_layout()
     out_path = os.path.join(FIG_DIR, f'fig2_ragas_evaluation_{model_name}.png')
     plt.savefig(out_path, bbox_inches='tight')
@@ -267,7 +267,7 @@ def plot_fig3_ablation_rag_effect():
     axes[1].text(1, np.mean(no_rag_rel) - 0.08, f'μ = {np.mean(no_rag_rel):.2f}\n(σ = {np.std(no_rag_rel):.2f})', ha='center', fontsize=9, fontweight='bold')
     axes[1].text(2, np.mean(with_rag_rel) - 0.08, f'μ = {np.mean(with_rag_rel):.2f}\n(σ = {np.std(with_rag_rel):.2f})', ha='center', fontsize=9, fontweight='bold')
 
-    fig.suptitle(f'Figure 3: Ablation 1 — Distribution of Generation Metrics (N = 36, {model_name})', fontweight='bold', y=1.02)
+    fig.suptitle(f'Figure: Ablation 1 — Distribution of Generation Metrics (N = 36, {model_name})', fontweight='bold', y=1.02)
     plt.tight_layout()
     out_path = os.path.join(FIG_DIR, f'fig3_ablation_rag_effect_{model_name}.png')
     plt.savefig(out_path, bbox_inches='tight')
@@ -345,7 +345,7 @@ def plot_fig4_ablation_filters_and_embeddings():
                                  xytext=(0, 2), textcoords="offset points",
                                  ha='center', va='bottom', fontsize=8, fontweight='bold')
 
-    fig.suptitle(f'Figure 4: Ablation Studies 2 & 3 (N = 36, {model_name})', fontweight='bold', y=1.02)
+    fig.suptitle(f'Figure: Ablation Studies 2 & 3 (N = 36, {model_name})', fontweight='bold', y=1.02)
     plt.tight_layout()
     out_path = os.path.join(FIG_DIR, f'fig4_ablation_filters_and_embeddings_{model_name}.png')
     plt.savefig(out_path, bbox_inches='tight')
@@ -459,7 +459,7 @@ def plot_fig5_cross_model_comparison():
             axes[1, 1].annotate(f'{height:.1f}%', xy=(bar.get_x() + bar.get_width() / 2, height),
                              xytext=(0, 2), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
 
-    fig.suptitle('Figure 5: Cross-Model Robustness (N = 36)', fontweight='bold', y=1.02)
+    fig.suptitle('Figure: Cross-Model Robustness (N = 36)', fontweight='bold', y=1.02)
     plt.tight_layout()
     out_path = os.path.join(FIG_DIR, 'fig5_cross_model_comparison.png')
     plt.savefig(out_path, bbox_inches='tight')
