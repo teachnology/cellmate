@@ -244,7 +244,7 @@ def plot_fig3_ablation_rag_effect():
         x_jitter = np.random.normal(i, 0.05, size=len(pts))
         axes[0].scatter(x_jitter, pts, alpha=0.4, color='black', s=20, zorder=3)
 
-    axes[0].set_title('A. Hallucination Reduction (Faithfulness)', fontweight='bold')
+    axes[0].set_title('A. Faithfulness', fontweight='bold')
     axes[0].set_ylabel('Faithfulness Score [0.0 - 1.0]')
     axes[0].set_ylim(-0.05, 1.1)
     axes[0].text(1, np.mean(no_rag_faith) - 0.08, f'μ = {np.mean(no_rag_faith):.2f}\n(σ = {np.std(no_rag_faith):.2f})', ha='center', fontsize=9, fontweight='bold')
@@ -261,7 +261,7 @@ def plot_fig3_ablation_rag_effect():
         x_jitter = np.random.normal(i, 0.05, size=len(pts))
         axes[1].scatter(x_jitter, pts, alpha=0.4, color='black', s=20, zorder=3)
 
-    axes[1].set_title('B. Pedagogical Anti-Spoiling (Answer Relevancy)', fontweight='bold')
+    axes[1].set_title('B. Answer Relevancy', fontweight='bold')
     axes[1].set_ylabel('Answer Relevancy Score [0.0 - 1.0]')
     axes[1].set_ylim(-0.05, 1.1)
     axes[1].text(1, np.mean(no_rag_rel) - 0.08, f'μ = {np.mean(no_rag_rel):.2f}\n(σ = {np.std(no_rag_rel):.2f})', ha='center', fontsize=9, fontweight='bold')
@@ -287,7 +287,7 @@ def plot_fig4_ablation_filters_and_embeddings():
     with open(abl_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.2))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
     abl2 = data.get('ablation_2_exercise_filter', {}).get('summary', {})
     if abl2:
@@ -320,7 +320,7 @@ def plot_fig4_ablation_filters_and_embeddings():
     abl3 = data.get('ablation_3_title_embedding', {}).get('summary', {})
     if abl3:
         metrics = ['hit@1', 'hit@3', 'hit@5', 'mrr']
-        labels = ['Hit@1 (%)', 'Hit@3 (%)', 'Hit@5 (%)', 'MRR (×100)']
+        labels = ['Hit@1 (%)', 'Hit@3 (%)', 'Hit@5 (%)', 'MRR']
         x = np.arange(len(metrics))
         width = 0.35
 
@@ -335,7 +335,7 @@ def plot_fig4_ablation_filters_and_embeddings():
         axes[1].set_xticklabels(labels)
         axes[1].set_ylabel('Retrieval Accuracy (%)')
         axes[1].set_ylim(min(min(content_only), min(title_content)) - 5, 102)
-        axes[1].legend(loc='lower right', frameon=True)
+        axes[1].legend(loc='upper right', frameon=True)
 
         for bars in [b_co, b_tc]:
             for bar in bars:
@@ -364,6 +364,10 @@ def plot_fig5_cross_model_comparison():
     with_rag_faiths = []
     no_rag_rels = []
     with_rag_rels = []
+    unfilt_prec3 = []
+    filt_prec3 = []
+    co_mrr = []
+    tc_mrr = []
 
     for path in sorted(files):
         m = re.search(r'[_|-](qwen3\.[0-9]+-[a-zA-Z]+)[\-_]', os.path.basename(path))
@@ -371,47 +375,88 @@ def plot_fig5_cross_model_comparison():
             name = m.group(1)
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                d = data.get('ablation_1_rag_effect', {}).get('summary', {})
+                d1 = data.get('ablation_1_rag_effect', {}).get('summary', {})
                 models.append(name)
-                no_rag_faiths.append(d.get('No-RAG', {}).get('faithfulness', 0.0))
-                with_rag_faiths.append(d.get('With-RAG (Dense)', {}).get('faithfulness', 0.0))
-                no_rag_rels.append(d.get('No-RAG', {}).get('answer_relevancy', 0.0))
-                with_rag_rels.append(d.get('With-RAG (Dense)', {}).get('answer_relevancy', 0.0))
+                no_rag_faiths.append(d1.get('No-RAG', {}).get('faithfulness', 0.0))
+                with_rag_faiths.append(d1.get('With-RAG (Dense)', {}).get('faithfulness', 0.0))
+                no_rag_rels.append(d1.get('No-RAG', {}).get('answer_relevancy', 0.0))
+                with_rag_rels.append(d1.get('With-RAG (Dense)', {}).get('answer_relevancy', 0.0))
+
+                abl2 = data.get('ablation_2_exercise_filter', {}).get('summary', {})
+                unfilt_prec3.append(abl2.get('Unfiltered (excludeExercises=False)', {}).get('prec@3', 0.0) * 100)
+                filt_prec3.append(abl2.get('Filtered (excludeExercises=True)', {}).get('prec@3', 0.0) * 100)
+
+                abl3 = data.get('ablation_3_title_embedding', {}).get('summary', {})
+                co_mrr.append(abl3.get('Content-Only Embedding', {}).get('mrr', 0.0) * 100)
+                tc_mrr.append(abl3.get('Title+Content Embedding', {}).get('mrr', 0.0) * 100)
 
     if not models:
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.3), sharey=True)
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
     x = np.arange(len(models))
     width = 0.35
 
-    b_nf = axes[0].bar(x - width/2, no_rag_faiths, width, label='No-RAG', color=PALETTE['light_orange'], edgecolor='black', alpha=0.85)
-    b_wf = axes[0].bar(x + width/2, with_rag_faiths, width, label='With-RAG', color=PALETTE['green'], edgecolor='black', alpha=0.85)
-    axes[0].set_title('A. Faithfulness Across Models', fontweight='bold')
-    axes[0].set_xticks(x)
-    axes[0].set_xticklabels(models, rotation=15)
-    axes[0].set_ylabel('Faithfulness Score [0.0 - 1.0]')
-    axes[0].set_ylim(0, 1.15)
-    axes[0].legend(loc='lower right', frameon=True)
+    b_nf = axes[0, 0].bar(x - width/2, no_rag_faiths, width, label='No-RAG', color=PALETTE['light_orange'], edgecolor='black', alpha=0.85)
+    b_wf = axes[0, 0].bar(x + width/2, with_rag_faiths, width, label='With-RAG', color=PALETTE['green'], edgecolor='black', alpha=0.85)
+    axes[0, 0].set_title('A. Faithfulness Across Models', fontweight='bold')
+    axes[0, 0].set_xticks(x)
+    axes[0, 0].set_xticklabels(models, rotation=15)
+    axes[0, 0].set_ylabel('Faithfulness Score [0.0 - 1.0]')
+    axes[0, 0].set_ylim(0, 1.15)
+    axes[0, 0].legend(loc='upper right', frameon=True)
 
     for bars in [b_nf, b_wf]:
         for bar in bars:
             height = bar.get_height()
-            axes[0].annotate(f'{height:.2f}', xy=(bar.get_x() + bar.get_width() / 2, height),
+            axes[0, 0].annotate(f'{height:.2f}', xy=(bar.get_x() + bar.get_width() / 2, height),
                              xytext=(0, 2), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
 
-    b_nr = axes[1].bar(x - width/2, no_rag_rels, width, label='No-RAG', color=PALETTE['light_blue'], edgecolor='black', alpha=0.85)
-    b_wr = axes[1].bar(x + width/2, with_rag_rels, width, label='With-RAG', color=PALETTE['primary'], edgecolor='black', alpha=0.85)
-    axes[1].set_title('B. Answer Relevancy Across Models', fontweight='bold')
-    axes[1].set_xticks(x)
-    axes[1].set_xticklabels(models, rotation=15)
-    axes[1].set_ylabel('')
-    axes[1].legend(loc='lower right', frameon=True)
+    b_nr = axes[0, 1].bar(x - width/2, no_rag_rels, width, label='No-RAG', color=PALETTE['light_blue'], edgecolor='black', alpha=0.85)
+    b_wr = axes[0, 1].bar(x + width/2, with_rag_rels, width, label='With-RAG', color=PALETTE['primary'], edgecolor='black', alpha=0.85)
+    axes[0, 1].set_title('B. Answer Relevancy Across Models', fontweight='bold')
+    axes[0, 1].set_xticks(x)
+    axes[0, 1].set_xticklabels(models, rotation=15)
+    axes[0, 1].set_ylabel('Answer Relevancy Score [0.0 - 1.0]')
+    axes[0, 1].set_ylim(0, 1.15)
+    axes[0, 1].legend(loc='upper right', frameon=True)
 
     for bars in [b_nr, b_wr]:
         for bar in bars:
             height = bar.get_height()
-            axes[1].annotate(f'{height:.2f}', xy=(bar.get_x() + bar.get_width() / 2, height),
+            axes[0, 1].annotate(f'{height:.2f}', xy=(bar.get_x() + bar.get_width() / 2, height),
+                             xytext=(0, 2), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    b_unf = axes[1, 0].bar(x - width/2, unfilt_prec3, width, label='Unfiltered', color=PALETTE['red'], edgecolor='black', alpha=0.75)
+    b_fil = axes[1, 0].bar(x + width/2, filt_prec3, width, label='Filtered (Exclude)', color=PALETTE['green'], edgecolor='black', alpha=0.85)
+    axes[1, 0].set_title('C. Retrieval: ± Exercise Filter (Prec@3)', fontweight='bold')
+    axes[1, 0].set_xticks(x)
+    axes[1, 0].set_xticklabels(models, rotation=15)
+    axes[1, 0].set_ylabel('Prec@3 (%)')
+    if unfilt_prec3 and filt_prec3:
+        axes[1, 0].set_ylim(0, max(max(unfilt_prec3), max(filt_prec3)) + 10)
+    axes[1, 0].legend(loc='upper right', frameon=True)
+
+    for bars in [b_unf, b_fil]:
+        for bar in bars:
+            height = bar.get_height()
+            axes[1, 0].annotate(f'{height:.1f}%', xy=(bar.get_x() + bar.get_width() / 2, height),
+                             xytext=(0, 2), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    b_co = axes[1, 1].bar(x - width/2, co_mrr, width, label='Content-Only', color=PALETTE['light_blue'], edgecolor='black', alpha=0.85)
+    b_tc = axes[1, 1].bar(x + width/2, tc_mrr, width, label='Title + Content', color=PALETTE['primary'], edgecolor='black', alpha=0.85)
+    axes[1, 1].set_title('D. Vectorization: ± Section Title (MRR)', fontweight='bold')
+    axes[1, 1].set_xticks(x)
+    axes[1, 1].set_xticklabels(models, rotation=15)
+    axes[1, 1].set_ylabel('MRR (%)')
+    if co_mrr and tc_mrr:
+        axes[1, 1].set_ylim(min(min(co_mrr), min(tc_mrr)) - 10, 105)
+    axes[1, 1].legend(loc='upper right', frameon=True)
+
+    for bars in [b_co, b_tc]:
+        for bar in bars:
+            height = bar.get_height()
+            axes[1, 1].annotate(f'{height:.1f}%', xy=(bar.get_x() + bar.get_width() / 2, height),
                              xytext=(0, 2), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
 
     fig.suptitle('Figure 5: Cross-Model Robustness (N = 36)', fontweight='bold', y=1.02)
