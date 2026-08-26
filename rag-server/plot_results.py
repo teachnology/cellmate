@@ -92,30 +92,32 @@ def plot_fig1_ir_benchmark():
     modalities = list(data.keys())
     engines = ['BM25-lite (Keyword)', 'Dense Embedding (Cosine)', 'Hybrid (BM25 + Dense RRF)']
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), sharey=True)
-
-    colors = [PALETTE['primary'], PALETTE['green'], PALETTE['purple']]
+    fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharey=True)
 
     for ax, mod in zip(axes, modalities):
         x = np.arange(len(engines))
-        width = 0.27
+        width = 0.16
 
         h1 = [data[mod].get(eng, {}).get('hit@1', 0) for eng in engines]
         h3 = [data[mod].get(eng, {}).get('hit@3', 0) for eng in engines]
+        h5 = [data[mod].get(eng, {}).get('hit@5', 0) for eng in engines]
         mrr = [data[mod].get(eng, {}).get('mrr', 0) * 100 for eng in engines]
+        map_score = [data[mod].get(eng, {}).get('map', 0) * 100 for eng in engines]
 
-        r1 = ax.bar(x - width, h1, width, label='Hit@1 (%)', color=PALETTE['light_blue'], edgecolor='black', alpha=0.85)
-        r2 = ax.bar(x, h3, width, label='Hit@3 (%)', color=PALETTE['primary'], edgecolor='black', alpha=0.85)
-        r3 = ax.bar(x + width, mrr, width, label='MRR (×100)', color=PALETTE['secondary'], edgecolor='black', alpha=0.85)
+        r1 = ax.bar(x - 2*width, h1, width, label='Hit@1 (%)', color=PALETTE['light_blue'], edgecolor='black', alpha=0.85)
+        r2 = ax.bar(x - width, h3, width, label='Hit@3 (%)', color=PALETTE['primary'], edgecolor='black', alpha=0.85)
+        r3 = ax.bar(x, h5, width, label='Hit@5 (%)', color=PALETTE['purple'], edgecolor='black', alpha=0.85)
+        r4 = ax.bar(x + width, mrr, width, label='MRR (×100)', color=PALETTE['light_orange'], edgecolor='black', alpha=0.85)
+        r5 = ax.bar(x + 2*width, map_score, width, label='MAP (×100)', color=PALETTE['secondary'], edgecolor='black', alpha=0.85)
 
         short_mod = mod.replace(' Query', '')
         ax.set_title(short_mod, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels(['BM25', 'Dense', 'Hybrid RRF'], rotation=0)
-        ax.set_ylim(0, 105)
-        ax.set_ylabel('Performance Score (%)' if ax == axes[0] else '')
+        ax.set_ylim(0, 110)
+        ax.set_ylabel('Performance Score (%)')
 
-        for bars in [r1, r2, r3]:
+        for bars in [r1, r2, r3, r4, r5]:
             for bar in bars:
                 height = bar.get_height()
                 ax.annotate(f'{height:.1f}%',
@@ -123,8 +125,8 @@ def plot_fig1_ir_benchmark():
                             xytext=(0, 3), textcoords="offset points",
                             ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
-    axes[0].legend(loc='lower right', frameon=True)
-    fig.suptitle(f'Figure 1: Information Retrieval Accuracy Across Query Modalities (N = 36, {model_name})', fontweight='bold', y=1.02)
+    axes[0].legend(loc='lower right', frameon=True, ncol=5)
+    fig.suptitle(f'Figure 1: Information Retrieval Accuracy Across Query Modalities (N = 36, {model_name})', fontweight='bold', y=1.01)
     plt.tight_layout()
     out_path = os.path.join(FIG_DIR, f'fig1_ir_benchmark_{model_name}.png')
     plt.savefig(out_path, bbox_inches='tight')
