@@ -96,19 +96,21 @@ def plot_fig1_ir_benchmark():
 
     for ax, mod in zip(axes, modalities):
         x = np.arange(len(engines))
-        width = 0.16
+        width = 0.13
 
         h1 = [data[mod].get(eng, {}).get('hit@1', 0) for eng in engines]
         h3 = [data[mod].get(eng, {}).get('hit@3', 0) for eng in engines]
         h5 = [data[mod].get(eng, {}).get('hit@5', 0) for eng in engines]
+        h10 = [data[mod].get(eng, {}).get('hit@10', 0) for eng in engines]
         mrr = [data[mod].get(eng, {}).get('mrr', 0) * 100 for eng in engines]
         map_score = [data[mod].get(eng, {}).get('map', 0) * 100 for eng in engines]
 
-        r1 = ax.bar(x - 2*width, h1, width, label='Hit@1 (%)', color=PALETTE['light_blue'], edgecolor='black', alpha=0.85)
-        r2 = ax.bar(x - width, h3, width, label='Hit@3 (%)', color=PALETTE['primary'], edgecolor='black', alpha=0.85)
-        r3 = ax.bar(x, h5, width, label='Hit@5 (%)', color=PALETTE['purple'], edgecolor='black', alpha=0.85)
-        r4 = ax.bar(x + width, mrr, width, label='MRR (×100)', color=PALETTE['light_orange'], edgecolor='black', alpha=0.85)
-        r5 = ax.bar(x + 2*width, map_score, width, label='MAP (×100)', color=PALETTE['secondary'], edgecolor='black', alpha=0.85)
+        r1 = ax.bar(x - 2.5*width, h1, width, label='Hit@1 (%)', color=PALETTE['light_blue'], edgecolor='black', alpha=0.85)
+        r2 = ax.bar(x - 1.5*width, h3, width, label='Hit@3 (%)', color=PALETTE['primary'], edgecolor='black', alpha=0.85)
+        r3 = ax.bar(x - 0.5*width, h5, width, label='Hit@5 (%)', color=PALETTE['purple'], edgecolor='black', alpha=0.85)
+        r4 = ax.bar(x + 0.5*width, h10, width, label='Hit@10 (%)', color=PALETTE['green'], edgecolor='black', alpha=0.85)
+        r5 = ax.bar(x + 1.5*width, mrr, width, label='MRR (%)', color=PALETTE['light_orange'], edgecolor='black', alpha=0.85)
+        r6 = ax.bar(x + 2.5*width, map_score, width, label='MAP (%)', color=PALETTE['secondary'], edgecolor='black', alpha=0.85)
 
         short_mod = mod.replace(' Query', '')
         ax.set_title(short_mod, fontweight='bold')
@@ -117,7 +119,7 @@ def plot_fig1_ir_benchmark():
         ax.set_ylim(0, 110)
         ax.set_ylabel('Performance Score (%)')
 
-        for bars in [r1, r2, r3, r4, r5]:
+        for bars in [r1, r2, r3, r4, r5, r6]:
             for bar in bars:
                 height = bar.get_height()
                 ax.annotate(f'{height:.1f}%',
@@ -125,7 +127,7 @@ def plot_fig1_ir_benchmark():
                             xytext=(0, 3), textcoords="offset points",
                             ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
-    axes[0].legend(loc='lower right', frameon=True, ncol=5)
+    axes[0].legend(loc='lower center', bbox_to_anchor=(0.5, 1.15), frameon=True, ncol=3)
     fig.suptitle(f'Figure 1: Information Retrieval Accuracy Across Query Modalities (N = 36, {model_name})', fontweight='bold', y=1.01)
     plt.tight_layout()
     out_path = os.path.join(FIG_DIR, f'fig1_ir_benchmark_{model_name}.png')
@@ -141,52 +143,64 @@ def plot_fig2_ragas_evaluation():
         d = data['summary']['AI Feedback']['Dense Embedding (ChromaDB)']
         return d['faithfulness'] + d['answer_relevancy']
 
-    ragas_file, model_name = get_best_model_file('ragas_eval_consolidated_*.json', score_ragas)
-    if not ragas_file:
+    ragas_file_cons, model_name = get_best_model_file('ragas_eval_consolidated_*.json', score_ragas)
+    if not ragas_file_cons:
         print("⚠️ RAGAs result file not found, skipping Fig 2.")
         return
 
-    with open(ragas_file, 'r', encoding='utf-8') as f:
-        data = json.load(f).get('summary', {})
+    ragas_file_sep = ragas_file_cons.replace('consolidated', 'separate')
+
+    with open(ragas_file_cons, 'r', encoding='utf-8') as f:
+        data_cons = json.load(f).get('summary', {})
+        
+    data_sep = {}
+    if os.path.exists(ragas_file_sep):
+        with open(ragas_file_sep, 'r', encoding='utf-8') as f:
+            data_sep = json.load(f).get('summary', {})
 
     scenarios = ['Pre-study Guide', 'AI Feedback']
     metrics = ['faithfulness', 'answer_relevancy', 'context_recall', 'context_precision']
     metric_labels = ['Faithfulness', 'Answer Rel.', 'Context Recall', 'Context Prec.']
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 4.8), sharey=True)
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9.6), sharey=True)
 
     engines = ['BM25-lite (Keyword)', 'Dense Embedding (ChromaDB)', 'Hybrid (BM25 + Dense RRF)']
     engine_labels = ['BM25 Keyword', 'Dense ChromaDB', 'Hybrid RRF']
     colors = [PALETTE['light_blue'], PALETTE['primary'], PALETTE['purple']]
+    
+    datasets = [(data_cons, 'Consolidated'), (data_sep, 'Separate')]
 
-    for ax, scen in zip(axes, scenarios):
-        if scen not in data:
-            continue
-        x = np.arange(len(metrics))
-        width = 0.25
+    for row, (data, data_label) in enumerate(datasets):
+        for col, scen in enumerate(scenarios):
+            ax = axes[row, col]
+            if scen not in data:
+                continue
+            x = np.arange(len(metrics))
+            width = 0.25
 
-        for i, (eng, label, c) in enumerate(zip(engines, engine_labels, colors)):
-            if eng in data[scen]:
-                vals = [data[scen][eng].get(m, 0.0) for m in metrics]
-                offset = (i - 1) * width
-                bars = ax.bar(x + offset, vals, width, label=label, color=c, edgecolor='black', alpha=0.85)
+            for i, (eng, label, c) in enumerate(zip(engines, engine_labels, colors)):
+                if eng in data[scen]:
+                    vals = [data[scen][eng].get(m, 0.0) for m in metrics]
+                    offset = (i - 1) * width
+                    bars = ax.bar(x + offset, vals, width, label=label if row == 0 and col == 0 else "", color=c, edgecolor='black', alpha=0.85)
 
-                for bar in bars:
-                    height = bar.get_height()
-                    if height > 0.05:
-                        ax.annotate(f'{height:.2f}',
-                                    xy=(bar.get_x() + bar.get_width() / 2, height),
-                                    xytext=(0, 2), textcoords="offset points",
-                                    ha='center', va='bottom', fontsize=8)
+                    for bar in bars:
+                        height = bar.get_height()
+                        if height > 0.05:
+                            ax.annotate(f'{height:.2f}',
+                                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                                        xytext=(0, 2), textcoords="offset points",
+                                        ha='center', va='bottom', fontsize=8)
 
-        ax.set_title(f'Scenario: {scen}', fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels(metric_labels, rotation=15)
-        ax.set_ylim(0, 1.15)
-        ax.set_ylabel('RAGAs Metric Score [0.0, 1.0]' if ax == axes[0] else '')
+            ax.set_title(f'{data_label}: {scen}', fontweight='bold')
+            ax.set_xticks(x)
+            ax.set_xticklabels(metric_labels, rotation=15)
+            ax.set_ylim(0, 1.15)
+            if col == 0:
+                ax.set_ylabel('RAGAs Metric Score [0.0, 1.0]')
 
-    axes[0].legend(loc='upper right', frameon=True)
-    fig.suptitle(f'Figure 2: End-to-End Generative Evaluation via RAGAs (N = 6, {model_name})', fontweight='bold', y=1.02)
+    axes[0, 0].legend(loc='upper right', frameon=True)
+    fig.suptitle(f'Figure 2: End-to-End Generative Evaluation via RAGAs (N = 6, {model_name})', fontweight='bold', y=1.01)
     plt.tight_layout()
     out_path = os.path.join(FIG_DIR, f'fig2_ragas_evaluation_{model_name}.png')
     plt.savefig(out_path, bbox_inches='tight')
