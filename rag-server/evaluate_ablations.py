@@ -294,8 +294,10 @@ def main():
     knowledge_dir = os.path.join(repo_path, "knowledge")
     chunks = load_knowledge_base(knowledge_dir)
     queries = load_benchmark_queries(repo_path)
-    if args.sample > 0:
-        queries = queries[:args.sample]
+    if args.sample > 0 and args.sample < len(queries):
+        import random
+        random.seed(42)
+        queries = random.sample(queries, args.sample)
 
     print(f"Loaded {len(chunks)} chunks and {len(queries)} queries.")
 

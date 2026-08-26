@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cellmate-rag-server"
+version = "0.1.0"
+description = "Standalone RAG Backend and Benchmark Evaluation Suite for CellMate"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "CellMate Project Team" }
+]
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "chromadb>=0.4.24",
+    "sentence-transformers>=2.5.1",
+    "streamlit>=1.32.0",
+    "langchain>=0.1.13",
+    "langchain-community>=0.0.29",
+    "langchain-openai>=0.0.8",
+    "langchain-text-splitters>=0.0.1",
+    "numpy>=1.24.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
