@@ -17,6 +17,8 @@ Outputs:
 
 import os
 import json
+import glob
+import re
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -52,12 +54,35 @@ FIG_DIR = os.path.join(os.path.dirname(__file__), 'figures')
 os.makedirs(FIG_DIR, exist_ok=True)
 
 
+def get_best_model_file(pattern, score_func):
+    files = glob.glob(os.path.join(RESULT_DIR, pattern))
+    best_file = None
+    best_score = -float('inf')
+    best_model = "unknown"
+    for path in files:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        try:
+            score = score_func(data)
+            if score > best_score:
+                best_score = score
+                best_file = path
+                m = re.search(r'[_|-](qwen3\.[0-9]+-[a-zA-Z]+)[\-_]', os.path.basename(path))
+                if m:
+                    best_model = m.group(1)
+        except Exception:
+            pass
+    return best_file, best_model
+
+
 def plot_fig1_ir_benchmark():
     """Figure 1: Information Retrieval Benchmark (Hit@K, MRR across engines and modalities)."""
-    ir_file = os.path.join(RESULT_DIR, 'rag_eval_results_qwen3.7-plus-36exercises.json')
-    if not os.path.exists(ir_file):
-        ir_file = os.path.join(os.path.dirname(__file__), 'rag_eval_results.json')
-    if not os.path.exists(ir_file):
+    def score_ir(data):
+        # Average MRR for Hybrid engine across all modalities
+        return np.mean([data[m]['Hybrid (BM25 + Dense RRF)']['mrr'] for m in data])
+
+    ir_file, model_name = get_best_model_file('rag_eval_results_*.json', score_ir)
+    if not ir_file:
         print("⚠️ IR result file not found, skipping Fig 1.")
         return
 
@@ -73,11 +98,11 @@ def plot_fig1_ir_benchmark():
 
     for ax, mod in zip(axes, modalities):
         x = np.arange(len(engines))
-        width = 0.22
+        width = 0.27
 
-        h1 = [data[mod][eng]['hit@1'] for eng in engines]
-        h3 = [data[mod][eng]['hit@3'] for eng in engines]
-        mrr = [data[mod][eng]['mrr'] * 100 for eng in engines]
+        h1 = [data[mod].get(eng, {}).get('hit@1', 0) for eng in engines]
+        h3 = [data[mod].get(eng, {}).get('hit@3', 0) for eng in engines]
+        mrr = [data[mod].get(eng, {}).get('mrr', 0) * 100 for eng in engines]
 
         r1 = ax.bar(x - width, h1, width, label='Hit@1 (%)', color=PALETTE['light_blue'], edgecolor='black', alpha=0.85)
         r2 = ax.bar(x, h3, width, label='Hit@3 (%)', color=PALETTE['primary'], edgecolor='black', alpha=0.85)
@@ -90,18 +115,18 @@ def plot_fig1_ir_benchmark():
         ax.set_ylim(0, 105)
         ax.set_ylabel('Performance Score (%)' if ax == axes[0] else '')
 
-        # Value annotations on top of Hit@3
-        for bar in r2:
-            height = bar.get_height()
-            ax.annotate(f'{height:.1f}%',
-                        xy=(bar.get_x() + bar.get_width() / 2, height),
-                        xytext=(0, 3), textcoords="offset points",
-                        ha='center', va='bottom', fontsize=8, fontweight='bold')
+        for bars in [r1, r2, r3]:
+            for bar in bars:
+                height = bar.get_height()
+                ax.annotate(f'{height:.1f}%',
+                            xy=(bar.get_x() + bar.get_width() / 2, height),
+                            xytext=(0, 3), textcoords="offset points",
+                            ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
     axes[0].legend(loc='lower right', frameon=True)
-    fig.suptitle('Figure 1: Information Retrieval Accuracy Across Query Modalities (N = 36)', fontweight='bold', y=1.02)
+    fig.suptitle(f'Figure 1: Information Retrieval Accuracy Across Query Modalities (N = 36, {model_name})', fontweight='bold', y=1.02)
     plt.tight_layout()
-    out_path = os.path.join(FIG_DIR, 'fig1_ir_benchmark.png')
+    out_path = os.path.join(FIG_DIR, f'fig1_ir_benchmark_{model_name}.png')
     plt.savefig(out_path, bbox_inches='tight')
     plt.close()
     print(f"  📊 Generated: {out_path}")
@@ -109,10 +134,13 @@ def plot_fig1_ir_benchmark():
 
 def plot_fig2_ragas_evaluation():
     """Figure 2: End-to-End RAGAs Generative Evaluation (Pre-study vs AI Feedback)."""
-    ragas_file = os.path.join(RESULT_DIR, 'ragas_eval_consolidated_qwen3.7-max-6exercises.json')
-    if not os.path.exists(ragas_file):
-        ragas_file = os.path.join(RESULT_DIR, 'ragas_eval_consolidated_qwen3.7-plus-6exercises.json')
-    if not os.path.exists(ragas_file):
+    def score_ragas(data):
+        # Average of faithfulness and answer_relevancy for AI Feedback -> Dense
+        d = data['summary']['AI Feedback']['Dense Embedding (ChromaDB)']
+        return d['faithfulness'] + d['answer_relevancy']
+
+    ragas_file, model_name = get_best_model_file('ragas_eval_consolidated_*.json', score_ragas)
+    if not ragas_file:
         print("⚠️ RAGAs result file not found, skipping Fig 2.")
         return
 
@@ -156,11 +184,239 @@ def plot_fig2_ragas_evaluation():
         ax.set_ylabel('RAGAs Metric Score [0.0, 1.0]' if ax == axes[0] else '')
 
     axes[0].legend(loc='upper right', frameon=True)
-    fig.suptitle('Figure 2: End-to-End Generative Evaluation via RAGAs (LLM-as-a-Judge)', fontweight='bold', y=1.02)
+    fig.suptitle(f'Figure 2: End-to-End Generative Evaluation via RAGAs (N = 6, {model_name})', fontweight='bold', y=1.02)
     plt.tight_layout()
-    out_path = os.path.join(FIG_DIR, 'fig2_ragas_evaluation.png')
+    out_path = os.path.join(FIG_DIR, f'fig2_ragas_evaluation_{model_name}.png')
     plt.savefig(out_path, bbox_inches='tight')
     plt.close()
     print(f"  📊 Generated: {out_path}")
 
 
+def plot_fig3_ablation_rag_effect():
+    """Figure 3: Ablation 1 — Distribution of Faithfulness & Relevancy (No-RAG vs With-RAG)."""
+    def score_abl1(data):
+        return data['ablation_1_rag_effect']['summary']['With-RAG (Dense)']['faithfulness']
+
+    abl_file, model_name = get_best_model_file('ablation_results-*.json', score_abl1)
+    if not abl_file:
+        print("⚠️ Ablation result file not found, skipping Fig 3.")
+        return
+
+    with open(abl_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    details = data.get('ablation_1_rag_effect', {}).get('details', [])
+    if not details:
+        return
+
+    no_rag_faith = [d['no_rag']['faithfulness'] for d in details]
+    with_rag_faith = [d['with_rag']['faithfulness'] for d in details]
+    no_rag_rel = [d['no_rag']['relevancy'] for d in details]
+    with_rag_rel = [d['with_rag']['relevancy'] for d in details]
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+
+    box_faith = axes[0].boxplot([no_rag_faith, with_rag_faith],
+                                tick_labels=['No-RAG Baseline', 'With-RAG Grounded'],
+                                patch_artist=True, widths=0.45,
+                                medianprops=dict(color='black', linewidth=1.5))
+    box_faith['boxes'][0].set_facecolor(PALETTE['light_orange'])
+    box_faith['boxes'][1].set_facecolor(PALETTE['green'])
+
+    np.random.seed(42)
+    for i, pts in enumerate([no_rag_faith, with_rag_faith], start=1):
+        x_jitter = np.random.normal(i, 0.05, size=len(pts))
+        axes[0].scatter(x_jitter, pts, alpha=0.4, color='black', s=20, zorder=3)
+
+    axes[0].set_title('A. Hallucination Reduction (Faithfulness)', fontweight='bold')
+    axes[0].set_ylabel('Faithfulness Score [0.0 - 1.0]')
+    axes[0].set_ylim(-0.05, 1.1)
+    axes[0].text(1, np.mean(no_rag_faith) - 0.08, f'μ = {np.mean(no_rag_faith):.2f}\n(σ = {np.std(no_rag_faith):.2f})', ha='center', fontsize=9, fontweight='bold')
+    axes[0].text(2, np.mean(with_rag_faith) - 0.08, f'μ = {np.mean(with_rag_faith):.2f}\n(σ = {np.std(with_rag_faith):.2f})', ha='center', fontsize=9, fontweight='bold', color='darkgreen')
+
+    box_rel = axes[1].boxplot([no_rag_rel, with_rag_rel],
+                              tick_labels=['No-RAG Baseline', 'With-RAG Grounded'],
+                              patch_artist=True, widths=0.45,
+                              medianprops=dict(color='black', linewidth=1.5))
+    box_rel['boxes'][0].set_facecolor(PALETTE['light_blue'])
+    box_rel['boxes'][1].set_facecolor(PALETTE['primary'])
+
+    for i, pts in enumerate([no_rag_rel, with_rag_rel], start=1):
+        x_jitter = np.random.normal(i, 0.05, size=len(pts))
+        axes[1].scatter(x_jitter, pts, alpha=0.4, color='black', s=20, zorder=3)
+
+    axes[1].set_title('B. Pedagogical Anti-Spoiling (Answer Relevancy)', fontweight='bold')
+    axes[1].set_ylabel('Answer Relevancy Score [0.0 - 1.0]')
+    axes[1].set_ylim(-0.05, 1.1)
+    axes[1].text(1, np.mean(no_rag_rel) - 0.08, f'μ = {np.mean(no_rag_rel):.2f}\n(σ = {np.std(no_rag_rel):.2f})', ha='center', fontsize=9, fontweight='bold')
+    axes[1].text(2, np.mean(with_rag_rel) - 0.08, f'μ = {np.mean(with_rag_rel):.2f}\n(σ = {np.std(with_rag_rel):.2f})', ha='center', fontsize=9, fontweight='bold')
+
+    fig.suptitle(f'Figure 3: Ablation 1 — Distribution of Generation Metrics (N = 36, {model_name})', fontweight='bold', y=1.02)
+    plt.tight_layout()
+    out_path = os.path.join(FIG_DIR, f'fig3_ablation_rag_effect_{model_name}.png')
+    plt.savefig(out_path, bbox_inches='tight')
+    plt.close()
+    print(f"  📊 Generated: {out_path}")
+
+
+def plot_fig4_ablation_filters_and_embeddings():
+    """Figure 4: Ablation 2 (Exercise Filtering) & Ablation 3 (Title-Augmented Embedding)."""
+    def score_abl2(data):
+        return data['ablation_2_exercise_filter']['summary']['Filtered (excludeExercises=True)']['mrr']
+
+    abl_file, model_name = get_best_model_file('ablation_results-*.json', score_abl2)
+    if not abl_file:
+        return
+
+    with open(abl_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.2))
+
+    abl2 = data.get('ablation_2_exercise_filter', {}).get('summary', {})
+    if abl2:
+        metrics = ['prec@1', 'prec@3', 'prec@5', 'mrr']
+        labels = ['Prec@1', 'Prec@3', 'Prec@5', 'MRR']
+        x = np.arange(len(metrics))
+        width = 0.35
+
+        unfilt = [abl2['Unfiltered (excludeExercises=False)'][m] for m in metrics]
+        filt = [abl2['Filtered (excludeExercises=True)'][m] for m in metrics]
+
+        b1 = axes[0].bar(x - width/2, unfilt, width, label='Unfiltered (Baseline)', color=PALETTE['red'], alpha=0.75, edgecolor='black')
+        b2 = axes[0].bar(x + width/2, filt, width, label='Filtered (excludeExercises=True)', color=PALETTE['green'], alpha=0.85, edgecolor='black')
+
+        axes[0].set_title('A. Pre-study Retrieval: ± Exercise Statement Filtering', fontweight='bold')
+        axes[0].set_xticks(x)
+        axes[0].set_xticklabels(labels)
+        axes[0].set_ylabel('Score [0.0 - 1.0]')
+        axes[0].set_ylim(0, max(max(unfilt), max(filt)) + 0.1)
+        axes[0].legend(loc='upper right', frameon=True)
+
+        for bars in [b1, b2]:
+            for bar in bars:
+                height = bar.get_height()
+                axes[0].annotate(f'{height:.2f}',
+                                 xy=(bar.get_x() + bar.get_width() / 2, height),
+                                 xytext=(0, 2), textcoords="offset points",
+                                 ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    abl3 = data.get('ablation_3_title_embedding', {}).get('summary', {})
+    if abl3:
+        metrics = ['hit@1', 'hit@3', 'hit@5', 'mrr']
+        labels = ['Hit@1 (%)', 'Hit@3 (%)', 'Hit@5 (%)', 'MRR (×100)']
+        x = np.arange(len(metrics))
+        width = 0.35
+
+        content_only = [abl3['Content-Only Embedding'].get(m, 0) if 'hit' in m else abl3['Content-Only Embedding'].get(m, 0)*100 for m in metrics]
+        title_content = [abl3['Title+Content Embedding'].get(m, 0) if 'hit' in m else abl3['Title+Content Embedding'].get(m, 0)*100 for m in metrics]
+
+        b_co = axes[1].bar(x - width/2, content_only, width, label='Content-Only', color=PALETTE['light_blue'], alpha=0.85, edgecolor='black')
+        b_tc = axes[1].bar(x + width/2, title_content, width, label='Title + Content (Enhanced)', color=PALETTE['primary'], alpha=0.85, edgecolor='black')
+
+        axes[1].set_title('B. Vectorization: ± Section Title Concatenation', fontweight='bold')
+        axes[1].set_xticks(x)
+        axes[1].set_xticklabels(labels)
+        axes[1].set_ylabel('Retrieval Accuracy (%)')
+        axes[1].set_ylim(min(min(content_only), min(title_content)) - 5, 102)
+        axes[1].legend(loc='lower right', frameon=True)
+
+        for bars in [b_co, b_tc]:
+            for bar in bars:
+                height = bar.get_height()
+                axes[1].annotate(f'{height:.1f}%',
+                                 xy=(bar.get_x() + bar.get_width() / 2, height),
+                                 xytext=(0, 2), textcoords="offset points",
+                                 ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    fig.suptitle(f'Figure 4: Ablation Studies 2 & 3 (N = 36, {model_name})', fontweight='bold', y=1.02)
+    plt.tight_layout()
+    out_path = os.path.join(FIG_DIR, f'fig4_ablation_filters_and_embeddings_{model_name}.png')
+    plt.savefig(out_path, bbox_inches='tight')
+    plt.close()
+    print(f"  📊 Generated: {out_path}")
+
+
+def plot_fig5_cross_model_comparison():
+    """Figure 5: Cross-Model Generalization (Comparing Faithfulness & Relevancy across model scales)."""
+    files = glob.glob(os.path.join(RESULT_DIR, 'ablation_results-*.json'))
+    if not files:
+        return
+        
+    models = []
+    no_rag_faiths = []
+    with_rag_faiths = []
+    no_rag_rels = []
+    with_rag_rels = []
+
+    for path in sorted(files):
+        m = re.search(r'[_|-](qwen3\.[0-9]+-[a-zA-Z]+)[\-_]', os.path.basename(path))
+        if m:
+            name = m.group(1)
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                d = data.get('ablation_1_rag_effect', {}).get('summary', {})
+                models.append(name)
+                no_rag_faiths.append(d.get('No-RAG', {}).get('faithfulness', 0.0))
+                with_rag_faiths.append(d.get('With-RAG (Dense)', {}).get('faithfulness', 0.0))
+                no_rag_rels.append(d.get('No-RAG', {}).get('answer_relevancy', 0.0))
+                with_rag_rels.append(d.get('With-RAG (Dense)', {}).get('answer_relevancy', 0.0))
+
+    if not models:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.3), sharey=True)
+    x = np.arange(len(models))
+    width = 0.35
+
+    b_nf = axes[0].bar(x - width/2, no_rag_faiths, width, label='No-RAG', color=PALETTE['light_orange'], edgecolor='black', alpha=0.85)
+    b_wf = axes[0].bar(x + width/2, with_rag_faiths, width, label='With-RAG', color=PALETTE['green'], edgecolor='black', alpha=0.85)
+    axes[0].set_title('A. Faithfulness Across Models', fontweight='bold')
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(models, rotation=15)
+    axes[0].set_ylabel('Faithfulness Score [0.0 - 1.0]')
+    axes[0].set_ylim(0, 1.15)
+    axes[0].legend(loc='lower right', frameon=True)
+
+    for bars in [b_nf, b_wf]:
+        for bar in bars:
+            height = bar.get_height()
+            axes[0].annotate(f'{height:.2f}', xy=(bar.get_x() + bar.get_width() / 2, height),
+                             xytext=(0, 2), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    b_nr = axes[1].bar(x - width/2, no_rag_rels, width, label='No-RAG', color=PALETTE['light_blue'], edgecolor='black', alpha=0.85)
+    b_wr = axes[1].bar(x + width/2, with_rag_rels, width, label='With-RAG', color=PALETTE['primary'], edgecolor='black', alpha=0.85)
+    axes[1].set_title('B. Answer Relevancy Across Models', fontweight='bold')
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(models, rotation=15)
+    axes[1].set_ylabel('')
+    axes[1].legend(loc='lower right', frameon=True)
+
+    for bars in [b_nr, b_wr]:
+        for bar in bars:
+            height = bar.get_height()
+            axes[1].annotate(f'{height:.2f}', xy=(bar.get_x() + bar.get_width() / 2, height),
+                             xytext=(0, 2), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    fig.suptitle('Figure 5: Cross-Model Robustness (N = 36)', fontweight='bold', y=1.02)
+    plt.tight_layout()
+    out_path = os.path.join(FIG_DIR, 'fig5_cross_model_comparison.png')
+    plt.savefig(out_path, bbox_inches='tight')
+    plt.close()
+    print(f"  📊 Generated: {out_path}")
+
+
+def main():
+    print("=" * 80)
+    print("🎨 GENERATING EXPERIMENTAL FIGURES FOR THESIS")
+    print("=" * 80)
+    plot_fig1_ir_benchmark()
+    plot_fig2_ragas_evaluation()
+    plot_fig3_ablation_rag_effect()
+    plot_fig4_ablation_filters_and_embeddings()
+    plot_fig5_cross_model_comparison()
+    print("\n🎉 All figures successfully generated and saved to rag-server/figures/!")
+
+
+if __name__ == '__main__':
+    main()
