@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# CellMate Evaluation Suite — Phase 2: Ablation Studies (消融实验对比)
+# CellMate Evaluation Suite — Phase 2: Ablation Studies
 # ==============================================================================
 # Executes isolated ablation experiments:
 #   1. Ablation 1: ± RAG Context (No-RAG Baseline vs With-RAG Grounded)
