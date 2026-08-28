@@ -1,6 +1,7 @@
 # CellMate RAG Server
-A standalone Python backend for semantic RAG retrieval using ChromaDB and SentenceTransformers.
-## Quick Start
+A standalone Python backend for semantic RAG retrieval using ChromaDB and SentenceTransformers. This directory also contains a Streamlit UI for knowledge management and a comprehensive Ragas evaluation suite for the project's research.
+
+## Quick Start (FastAPI Server)
 ```bash
 # 1. Create a virtual environment (recommended)
 python3 -m venv .venv
@@ -34,3 +35,16 @@ ChromaDB data is stored in `./chroma_data/` (created automatically on first run)
 To reset the index, either:
 - Delete the `chroma_data/` directory, or
 - Send a POST to `/index` with `"reset": true`
+
+## Knowledge Management UI (Streamlit)
+We provide an interactive web interface to easily upload documents, chunk them, and chat with the RAG engine.
+```bash
+# Start the Streamlit app
+streamlit run app.py
+```
+The app will open in your browser (usually at `http://localhost:8501`). It supports uploading `.md`, `.py`, `.txt`, and `.ipynb` files, complete with MD5 deduplication.
+
+## Evaluation & Benchmarks
+This directory contains the core evaluation logic for the project, including Information Retrieval (IR) benchmarks, Ragas quality evaluation, and ablation studies.
+
+For detailed instructions on running these evaluations, see the **[Reproducibility Guide](REPRODUCIBILITY.md)**.
