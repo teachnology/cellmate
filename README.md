@@ -12,7 +12,7 @@ Cellmate is an AI-powered teaching feedback extension designed specifically for 
 - **Hybrid Retrieval**: Utilizes Hybrid RRF (Reciprocal Rank Fusion) for highly accurate context fetching.
 - **Evaluation Framework**: Built-in evaluation scripts using Ragas to ensure high generation and retrieval quality.
 
-### 2. Prompt Template System
+### 3. Prompt Template System
 - **Flexible Placeholders**: Supports various types of placeholders and cell references
 - **Dynamic Content Filling**: Automatically fills templates based on notebook content
 - **Multi-format Support**: Supports HTML comments, Markdown comments, and other formats
