@@ -1,11 +1,16 @@
 # Cellmate - VS Code Jupyter Notebook AI Feedback Extension
 
-Cellmate is an AI-powered teaching feedback extension designed specifically for VS Code Jupyter Notebooks. It automatically analyzes student code, runs hidden tests, generates personalized feedback, and provides intelligent chat functionality.
+Cellmate is an AI-powered teaching feedback extension designed specifically for VS Code Jupyter Notebooks. It automatically analyzes student code, runs hidden tests, generates personalized feedback, and provides intelligent chat functionality backed by a powerful Retrieval-Augmented Generation (RAG) engine.
 
 ## Key Features
 ### 1. AI Feedback Generation
 - **Personalized Feedback**: Generates targeted feedback based on student code and test results
 - **Template-based Prompts**: Uses a flexible prompt template system with support for various placeholders
+
+### 2. Intelligent RAG Engine
+- **Local Vector Database**: Built-in ChromaDB for fast retrieval of course materials and historical context.
+- **Hybrid Retrieval**: Utilizes Hybrid RRF (Reciprocal Rank Fusion) for highly accurate context fetching.
+- **Evaluation Framework**: Built-in evaluation scripts using Ragas to ensure high generation and retrieval quality.
 
 ### 2. Prompt Template System
 - **Flexible Placeholders**: Supports various types of placeholders and cell references
@@ -22,17 +27,25 @@ git clone https://github.com/teachnology/cellmate
 cd cellmate
 ```
 
-2. Install dependencies:
+2. Install extension dependencies:
 ```bash
 npm install
 ```
 
-3. Compile the extension:
+3. Setup the local RAG Server (Python environment):
+```bash
+cd rag-server
+python -m venv .venv
+source .venv/bin/activate  # On Windows use: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+4. Compile the extension:
 ```bash
 npm run compile
 ```
 
-4. Press `F5` in VS Code to start debugging mode, or package as `.vsix` file for installation
+5. Press `F5` in VS Code to start debugging mode, or package as `.vsix` file for installation
 ## Usage
 ### Basic Usage
 
@@ -195,24 +208,30 @@ Write a function to calculate the number of digits in a given integer. For examp
 3. Multiple blocks with the same key will be automatically concatenated
 4. Placeholders not found will be replaced with empty strings
 
+## 📊 Evaluation & Reproducibility
+
+Cellmate includes a comprehensive evaluation suite in the `rag-server/` directory, which utilizes the Ragas framework to assess retrieval and generation quality (Faithfulness, Answer Relevancy, Context Recall, Context Precision). It also includes an Information Retrieval (IR) benchmark and ablation studies.
+
+To independently reproduce all empirical results, benchmarks, and ablation studies reported in the CellMate project, please refer to the detailed guide:
+👉 **[Reproducibility Guide](rag-server/REPRODUCIBILITY.md)**
 
 ## Project Structure
 ```
 cellmate/
-├── src/                  # Source code directory
-│   ├── extension.ts      # Main extension file
+├── src/                  # VS Code Extension source code
+│   ├── extension.ts      # Main extension entry and UI orchestration
+│   ├── apiCaller.ts      # API calling and LLM networking
+│   ├── localServer.ts    # Manages local RAG Python server lifecycle
+│   ├── ragUtils.ts       # RAG integration utilities
 │   ├── promptUtils.ts    # Prompt template processing
-│   ├── testUtils.ts      # Test execution and analysis
-│   ├── gitUtils.ts       # Git repository operations
-│   ├── configParser.ts   # Configuration parsing
-│   ├── apiCaller.ts      # API calling
-│   ├── templateUtils.ts  # Template utilities
-│   ├── speech.ts         # Speech functionality
-│   ├── localServer.ts    # Local server
-│   └── ffmpegRecorder.ts # Recording functionality
+│   └── ...               # Git, Speech, and other utilities
+├── rag-server/           # Python RAG Backend Server
+│   ├── app.py / server.py# Backend API endpoints
+│   ├── chroma_data/      # Local ChromaDB vector storage
+│   ├── evaluate_*.py     # Ragas evaluation and ablation scripts
+│   ├── result/           # Benchmark JSON results
+│   └── requirements.txt  # Python dependencies
 ├── docs/                 # Documentation directory
-│   ├── README.md         # Documentation index
-│   └── promptUtils.md    # Prompt template system 
 ├── README.md             # Main project documentation
 └── package.json          # Project configuration
 ```
