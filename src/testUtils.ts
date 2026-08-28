@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as cp from 'child_process';
 import * as tmp from 'tmp';
+import * as os from 'os';
 
 /**
  * Get the Python path from the active notebook's kernel
@@ -55,6 +56,56 @@ export function ensurePythonDeps(pythonPath: string, pkgs: string[]): Promise<bo
 }
 
 /**
+ * Create or get a virtual environment with system-site-packages and install dependencies
+ */
+export async function prepareVenv(basePython: string): Promise<string | null> {
+  const isWindows = process.platform === 'win32';
+  const venvDir = path.join(os.tmpdir(), 'cellmate_venv');
+  const venvPython = isWindows ? path.join(venvDir, 'Scripts', 'python.exe') : path.join(venvDir, 'bin', 'python');
+  const venvPip = isWindows ? path.join(venvDir, 'Scripts', 'pip.exe') : path.join(venvDir, 'bin', 'pip');
+
+  return new Promise((resolve) => {
+    // Check if venv exists and pytest is installed
+    if (fs.existsSync(venvPython)) {
+      cp.execFile(venvPython, ['-m', 'pytest', '--version'], (err) => {
+        if (!err) {
+          resolve(venvPython);
+        } else {
+          // Exists but pytest is broken/missing, reinstall
+          installDeps();
+        }
+      });
+    } else {
+      // Create venv
+      vscode.window.showInformationMessage('Cellmate: Creating test virtual environment... (first time only)');
+      cp.execFile(basePython, ['-m', 'venv', '--system-site-packages', venvDir], (err, stdout, stderr) => {
+        if (err) {
+          vscode.window.showErrorMessage(`Failed to create virtual environment: ${stderr || err.message}`);
+          resolve(null);
+        } else {
+          installDeps();
+        }
+      });
+    }
+
+    function installDeps() {
+      const pkgs = ['pytest', 'pytest-json-report'];
+      // Use "python -m pip" instead of calling the pip binary directly,
+      // because some environments (e.g., macOS system Python) create venvs
+      // without a standalone pip executable in bin/
+      cp.execFile(venvPython, ['-m', 'pip', 'install', ...pkgs], (err, stdout, stderr) => {
+        if (err) {
+          vscode.window.showErrorMessage(`Cellmate: install dependencies failed in venv: ${stderr || err.message}`);
+          resolve(null);
+        } else {
+          resolve(venvPython);
+        }
+      });
+    }
+  });
+}
+
+/**
  * Run local tests using pytest
  */
 export async function runLocalTest(
@@ -97,7 +148,7 @@ export async function runLocalTest(
         const dest = path.join(tmpDir.name, baseName);
         copyDirectoryRecursive(dir, dest);
       }
-    } catch (e:any) {
+    } catch (e: any) {
       vscode.window.showWarningMessage(`Failed to copy resource directories: ${e?.message || e}`);
     }
   }
@@ -193,7 +244,7 @@ export function extractErrorMessage(test: any): string {
  * Extract test input from assertion message
  */
 export function extractTestInput(assertionMsg: string): string {
-  // 匹配 func(args) 形式，支持多参数、负数、小数、字符串、列表等
+  // Match func(args) format, supporting multiple parameters, negative numbers, floats, strings, lists, etc.
   const m = assertionMsg.match(/([a-zA-Z_][a-zA-Z0-9_]*)\(([^\)]*)\)/);
   if (m) return `${m[1]}(${m[2]})`;
   return '';
@@ -222,7 +273,7 @@ export function generateSuggestions(failedTests: any[], metadata: any): string[]
 export function extractAssertionLine(test: any): string {
   const longreprObj = test.call?.longrepr ?? test.longrepr ?? '';
 
-  // ---- case ① longrepr 是对象（pytest-json-report ≥ 3） ----
+  // ---- case 1: longrepr is an object (pytest-json-report >= 3) ----
   if (typeof longreprObj === 'object' && longreprObj) {
     const msg = longreprObj.reprcrash?.message;
     if (msg) return msg.trim();
@@ -235,7 +286,7 @@ export function extractAssertionLine(test: any): string {
     return (src ?? lrText.split('\n')[0] ?? '').trim();
   }
 
-  // ---- case ② longrepr 是字符串 ----
+  // ---- case 2: longrepr is a string ----
   const lines = (longreprObj as string).split('\n');
   const runtime = lines.find(l => /AssertionError:/i.test(l));
   if (runtime) return runtime.trim();
@@ -289,4 +340,74 @@ export function generateConciseTestSummary(failedTests: any[], totalTests: numbe
   }
 
   return summary;
-} 
+}
+
+/**
+ * Generate a visual, student-facing test result summary for the AI Feedback cell.
+ * This is shown directly to the student (not embedded in the LLM prompt).
+ *
+ * Returns a markdown block with:
+ * - Emoji progress bar
+ * - Pass/fail counts
+ * - Up to 3 failed test details
+ * - All-pass celebration for perfect submissions
+ */
+export function generateVisualTestSummary(testResult: any): string {
+  if (!testResult?.report?.tests) {
+    // No test report available
+    if (testResult?.timeout) {
+      return `> **Test Results**: Execution timed out — your code may contain an infinite loop.\n\n`;
+    }
+    if (testResult?.stderr) {
+      return `> **Test Results**: Tests could not run — code has execution errors.\n\n`;
+    }
+    return '';
+  }
+
+  const tests = testResult.report.tests;
+  const total = tests.length;
+  if (total === 0) {
+    return `> **Test Results**: No tests executed — likely a code error prevents loading.\n\n`;
+  }
+
+  const passed = tests.filter((t: any) => t.outcome === 'passed').length;
+  const failed = total - passed;
+  const rate = Math.round((passed / total) * 100);
+
+  // Build emoji progress bar (10 segments)
+  const filledCount = Math.round((passed / total) * 10);
+  const bar = '🟩'.repeat(filledCount) + '🟥'.repeat(10 - filledCount);
+
+  const lines: string[] = [];
+
+  if (failed === 0) {
+    // All passed — celebration!
+    lines.push(`> ✅ **Test Results**: ${passed}/${total} passed ${bar} **${rate}%**`);
+    lines.push(`>`);
+    lines.push(`> All tests passed! 🎉`);
+  } else {
+    // Has failures — show details
+    lines.push(`> 📋 **Test Results**: ${passed}/${total} passed ${bar} **${rate}%**`);
+
+    const failedTests = tests.filter((t: any) => t.outcome === 'failed');
+    const maxShow = Math.min(failedTests.length, 3);
+
+    for (let i = 0; i < maxShow; i++) {
+      const t = failedTests[i];
+      const testName = t.nodeid?.split('::').pop() || 'Unknown';
+      const assertionLine = extractAssertionLine(t);
+      // Truncate long assertion messages for display
+      const display = assertionLine.length > 100
+        ? assertionLine.substring(0, 97) + '...'
+        : assertionLine;
+      lines.push(`> ❌ \`${testName}\`: ${display}`);
+    }
+
+    if (failedTests.length > maxShow) {
+      lines.push(`> ... and ${failedTests.length - maxShow} more failed test${failedTests.length - maxShow > 1 ? 's' : ''}`);
+    }
+  }
+
+  lines.push('');
+  return lines.join('  \n') + '\n';
+}

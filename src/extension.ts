@@ -1,24 +1,28 @@
 import * as vscode from 'vscode';
 import axios from 'axios';
 import * as path from 'path';
+import * as cp from 'child_process';
 import { toggleRecording } from './speech';
 import { killLocal } from './localServer';
 import { setExtensionContext } from './localServer';
-import { 
-  syncGitRepo, 
-  getPromptContent, 
-  getTestFiles, 
-  listLocalExercises, 
+import {
+  syncGitRepo,
+  getPromptContent,
+  getTestFiles,
+  listLocalExercises,
   listLocalTemplates,
+  hasKnowledgeBase,
   LOCAL_REPO_PATH,
 } from './gitUtils';
+import { buildRagIndex, buildSemanticIndex, loadRagIndex, retrieveContext, embedTexts, deriveEmbeddingUrl, indexToChromaDB, queryChromaDB } from './ragUtils';
 import {
   getNotebookPythonPath,
   checkPytestInstalled,
-  ensurePythonDeps,
+  prepareVenv,
   runLocalTest,
   generateSuggestions,
-  generateConciseTestSummary
+  generateConciseTestSummary,
+  generateVisualTestSummary
 } from './testUtils';
 import {
   extractPromptId,
@@ -27,11 +31,12 @@ import {
   extractPromptPlaceholders,
   fillPromptTemplate
 } from './promptUtils';
+import { initFeedbackHistory, getHistory, addRecord, formatHistoryForPrompt, formatScaffoldingInstructions, extractLevel, FeedbackRecord } from './feedbackHistory';
 
 const chan = vscode.window.createOutputChannel("Jupyter AI Feedback");
-function toStr(x:any){ try{ return typeof x==='string'?x:JSON.stringify(x,(_k,v)=>v,2);}catch{ return String(x);} }
-export function log(...args:any[]){ chan.appendLine(`[${new Date().toISOString()}] ` + args.map(toStr).join(" ")); console.log(...args); }
-export function showLog(preserveFocus=true){ chan.show(preserveFocus); }
+function toStr(x: any) { try { return typeof x === 'string' ? x : JSON.stringify(x, (_k, v) => v, 2); } catch { return String(x); } }
+export function log(...args: any[]) { chan.appendLine(`[${new Date().toISOString()}] ` + args.map(toStr).join(" ")); console.log(...args); }
+export function showLog(preserveFocus = true) { chan.show(preserveFocus); }
 
 let recording = false;
 // Throttle: restrict 'CellMate.sendNotebookCell' to once per 3 seconds
@@ -669,7 +674,7 @@ async function addAnalysisToCellOutput(cell: vscode.NotebookCell, analysis: stri
 
     // Create markdown-formatted analysis
     const formattedAnalysis = `
-## 🆘 Error Helper Analysis
+## Error Helper Analysis
 
 ${analysis}
 
@@ -721,7 +726,7 @@ ${analysis}
     const isMac = process.platform === 'darwin';
     const shortcut = isMac ? 'Cmd+Shift+P' : 'Ctrl+Shift+P';
 
-    const content = `# **🆘 Error Helper**
+    const content = `# **Error Helper**
 
 ${analysis}
 
@@ -773,11 +778,11 @@ async function callLLMAPI(prompt: string, config: LLMConfig): Promise<string> {
     config.apiUrl,
     body,
     {
-        headers: {
+      headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${config.apiKey}`
-        },
-        responseType: isOpenAIEndpoint ? 'json' : 'text'
+      },
+      responseType: isOpenAIEndpoint ? 'json' : 'text'
     }
   );
 
@@ -921,14 +926,14 @@ function findExistingErrorHelperFeedback(cell: vscode.NotebookCell): string | un
       const content = nextCell.document.getText();
 
       // Check if this is an Error Helper markdown cell
-      if (content.includes('🆘 Error Helper') || content.includes('**🆘 Error Helper**')) {
+      if (content.includes('Error Helper') || content.includes('**Error Helper**')) {
         // Extract the feedback content (skip the header)
         const lines = content.split('\n');
         const feedbackLines = [];
         let foundContent = false;
 
         for (const line of lines) {
-          if (line.includes('🆘 Error Helper')) {
+          if (line.includes('Error Helper')) {
             foundContent = true;
             continue;
           }
@@ -955,14 +960,14 @@ function findExistingErrorHelperFeedback(cell: vscode.NotebookCell): string | un
           const decoder = new TextDecoder();
           const content = decoder.decode(item.data);
 
-          if (content.includes('🆘 Error Helper Analysis')) {
+          if (content.includes('Error Helper Analysis')) {
             // Extract the analysis content
             const lines = content.split('\n');
             const analysisLines = [];
             let foundContent = false;
 
             for (const line of lines) {
-              if (line.includes('🆘 Error Helper Analysis')) {
+              if (line.includes('Error Helper Analysis')) {
                 foundContent = true;
                 continue;
               }
@@ -999,50 +1004,272 @@ async function insertMarkdownCellBelow(notebook: vscode.NotebookDocument, cellIn
   await vscode.workspace.applyEdit(edit);
 }
 
+/**
+ * Replace the content of a markdown cell at the given index.
+ * Used for streaming updates — progressively replace text as chunks arrive.
+ */
+async function replaceMarkdownCellContent(notebook: vscode.NotebookDocument, cellIndex: number, content: string) {
+  const edit = new vscode.WorkspaceEdit();
+  const newCell = new vscode.NotebookCellData(
+    vscode.NotebookCellKind.Markup,
+    content,
+    'markdown'
+  );
+  // Replace the cell at cellIndex with new content
+  const notebookEdit = vscode.NotebookEdit.replaceCells(
+    new vscode.NotebookRange(cellIndex, cellIndex + 1),
+    [newCell]
+  );
+  edit.set(notebook.uri, [notebookEdit]);
+  await vscode.workspace.applyEdit(edit);
+}
+
+// ---------------------------------------------------------------------------
+// RAG Server lifecycle management
+// ---------------------------------------------------------------------------
+let ragServerProcess: cp.ChildProcess | null = null;
+
+/**
+ * Check if the rag-server is already running by hitting /health.
+ */
+async function isRagServerRunning(serverUrl: string): Promise<boolean> {
+  try {
+    const resp = await axios.get(`${serverUrl.replace(/\/$/, '')}/health`, { timeout: 3000 });
+    return resp.data?.status === 'ok';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Start the rag-server as a background child process.
+ * Auto-installs Python dependencies if needed.
+ */
+async function startRagServer(extensionPath: string): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration('CellMate');
+  const serverUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
+
+  // Don't start if already running (e.g., user started it manually)
+  if (await isRagServerRunning(serverUrl)) {
+    log('RAG server already running at', serverUrl);
+    return;
+  }
+
+  let ragServerDir = path.join(extensionPath, 'rag-server');
+  let serverScript = path.join(ragServerDir, 'server.py');
+  const fs = require('fs');
+  if (!fs.existsSync(serverScript)) {
+    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+      const wsDir = path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, 'rag-server');
+      if (fs.existsSync(path.join(wsDir, 'server.py'))) {
+        ragServerDir = wsDir;
+        serverScript = path.join(wsDir, 'server.py');
+      }
+    }
+  }
+
+  if (!fs.existsSync(serverScript)) {
+    log('rag-server/server.py not found at', serverScript);
+    return;
+  }
+
+  // Find Python
+  const pythonPath = await getNotebookPythonPath() || 'python3';
+
+  // Install dependencies first (pip install -r requirements.txt)
+  const reqFile = path.join(ragServerDir, 'requirements.txt');
+  if (fs.existsSync(reqFile)) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        cp.execFile(pythonPath, ['-m', 'pip', 'install', '-r', reqFile, '-q'], { timeout: 120000 }, (err) => {
+          if (err) reject(err); else resolve();
+        });
+      });
+    } catch (err: any) {
+      log('Failed to install rag-server dependencies:', err.message);
+      vscode.window.showWarningMessage('CellMate: Failed to install RAG server dependencies. ChromaDB mode may not work.');
+    }
+  }
+
+  // Spawn the server process
+  log('Starting RAG server from', serverScript);
+  ragServerProcess = cp.spawn(pythonPath, [serverScript], {
+    cwd: ragServerDir,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: false,
+  });
+
+  ragServerProcess.stdout?.on('data', (data: Buffer) => {
+    log('[rag-server]', data.toString().trim());
+  });
+
+  ragServerProcess.stderr?.on('data', (data: Buffer) => {
+    log('[rag-server:err]', data.toString().trim());
+  });
+
+  ragServerProcess.on('exit', (code) => {
+    log(`RAG server exited with code ${code}`);
+    ragServerProcess = null;
+  });
+
+  // Wait for the server to be ready (up to 60s for model download on first run)
+  let ready = false;
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    if (await isRagServerRunning(serverUrl)) {
+      ready = true;
+      break;
+    }
+  }
+
+  if (ready) {
+    log('RAG server started successfully');
+    vscode.window.showInformationMessage('CellMate: RAG server started (ChromaDB mode ready)');
+  } else {
+    log('RAG server failed to start within timeout');
+    vscode.window.showWarningMessage('CellMate: RAG server failed to start. Check Output panel for details.');
+  }
+}
+
+/**
+ * Check configuration and auto start RAG server if ragMode is set to 'chromadb'.
+ */
+async function checkAndStartRagServer(extensionPath: string): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration('CellMate');
+  const ragMode = cfg.get<string>('ragMode', 'keyword');
+  if (ragMode === 'chromadb') {
+    await startRagServer(extensionPath);
+  }
+}
+
+/**
+ * Stop the rag-server child process.
+ */
+function stopRagServer(): void {
+  if (ragServerProcess) {
+    log('Stopping RAG server...');
+    ragServerProcess.kill();
+    ragServerProcess = null;
+  }
+}
+
 export function activate(ctx: vscode.ExtensionContext) {
   setExtensionContext(ctx);
+  initFeedbackHistory(ctx);
+
+  // Auto-start rag-server if configured for chromadb mode
+  checkAndStartRagServer(ctx.extensionPath);
+
+  // Listen for config changes to auto-start if user switches to chromadb mode
+  ctx.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('CellMate.ragMode') || e.affectsConfiguration('CellMate.useRAG')) {
+        checkAndStartRagServer(ctx.extensionPath);
+      }
+    })
+  );
+  // Auto-feedback: listen for cell execution completion via document changes
+  // Track cells that have already been auto-triggered to prevent duplicates
+  const autoFeedbackTriggered = new Set<string>();
+
+  ctx.subscriptions.push(
+    vscode.workspace.onDidChangeNotebookDocument(e => {
+      const cfg = vscode.workspace.getConfiguration('CellMate');
+      const autoFeedback = cfg.get<boolean>('autoFeedback', false);
+      if (!autoFeedback) return;
+
+      for (const cellChange of e.cellChanges) {
+        // Only react when executionSummary changes (= cell finished executing)
+        if (!cellChange.executionSummary) continue;
+
+        const cell = cellChange.cell;
+
+        // Only for code cells with Python
+        if (cell.kind !== vscode.NotebookCellKind.Code) continue;
+        if (cell.document.languageId !== 'python') continue;
+
+        // Only if the cell contains an EXERCISE_ID
+        const code = cell.document.getText();
+        const hasExerciseId = /^\s*#\s*EXERCISE_ID\s*:/m.test(code);
+        if (!hasExerciseId) continue;
+
+        // Debounce: use execution count + cell URI to prevent re-triggering
+        const execCount = cellChange.executionSummary.executionOrder ?? 0;
+        const dedupeKey = `${cell.document.uri.toString()}::${execCount}`;
+        if (autoFeedbackTriggered.has(dedupeKey)) continue;
+        autoFeedbackTriggered.add(dedupeKey);
+
+        // Cap the set size to prevent memory leak
+        if (autoFeedbackTriggered.size > 100) {
+          const firstKey = autoFeedbackTriggered.values().next().value;
+          if (firstKey) autoFeedbackTriggered.delete(firstKey);
+        }
+
+        log('Auto-feedback: cell execution completed, triggering AI feedback...');
+        // Small delay to ensure cell output is fully rendered
+        setTimeout(() => {
+          vscode.commands.executeCommand('CellMate.sendNotebookCell', cell);
+        }, 500);
+      }
+    })
+  );
+
   const provider: vscode.NotebookCellStatusBarItemProvider = {
     provideCellStatusBarItems(cell) {
       const items = [];
       if (cell.document.languageId === 'python') {
-          const cfg = vscode.workspace.getConfiguration('CellMate');
-          const alwaysShowErrorHelper = cfg.get<boolean>('errorHelper.alwaysShow', false);
+        const cfg = vscode.workspace.getConfiguration('CellMate');
+        const alwaysShowErrorHelper = cfg.get<boolean>('errorHelper.alwaysShow', false);
 
-          const cellOutput = getCellOutput(cell);
-          const hasError = cellOutput.executionError ||
-                          (cellOutput.hasOutput && cellOutput.output.toLowerCase().includes('error'));
+        const cellOutput = getCellOutput(cell);
+        const hasError = cellOutput.executionError ||
+          (cellOutput.hasOutput && cellOutput.output.toLowerCase().includes('error'));
 
-          const shouldShowErrorHelper = alwaysShowErrorHelper || hasError;
+        const shouldShowErrorHelper = alwaysShowErrorHelper || hasError;
 
-          if (shouldShowErrorHelper) {
-            const errorHelperItem = new vscode.NotebookCellStatusBarItem(
-              '🆘 Error Helper',
-              vscode.NotebookCellStatusBarAlignment.Right
-            );
-            errorHelperItem.priority = 200;
-            errorHelperItem.command = {
-              command: 'CellMate.errorHelper',
-              title: 'Error Helper',
-              arguments: [cell]
-            };
-            errorHelperItem.tooltip = hasError ?
-              'Get AI help with this error' :
-              'Get AI help with your code (no errors detected)';
-            items.push(errorHelperItem);
-          }
-
-          // Original AI Feedback button
-          const item = new vscode.NotebookCellStatusBarItem(
-            '$(zap) 🧠 AI Feedback',
+        if (shouldShowErrorHelper) {
+          const errorHelperItem = new vscode.NotebookCellStatusBarItem(
+            'Error Helper',
             vscode.NotebookCellStatusBarAlignment.Right
           );
-          item.priority = 100;
-          item.command = {
-            command: 'CellMate.sendNotebookCell',
-            title: 'Send to AI',
+          errorHelperItem.priority = 200;
+          errorHelperItem.command = {
+            command: 'CellMate.errorHelper',
+            title: 'Error Helper',
             arguments: [cell]
           };
-          items.push(item);
+          errorHelperItem.tooltip = hasError ?
+            'Get AI help with this error' :
+            'Get AI help with your code (no errors detected)';
+          items.push(errorHelperItem);
+        }
+
+        // Original AI Feedback button
+        const item = new vscode.NotebookCellStatusBarItem(
+          '$(zap) AI Feedback',
+          vscode.NotebookCellStatusBarAlignment.Right
+        );
+        item.priority = 100;
+        item.command = {
+          command: 'CellMate.sendNotebookCell',
+          title: 'Send to AI',
+          arguments: [cell]
+        };
+        items.push(item);
+
+        // Pre-study Guide button (RAG-powered)
+        const prestudyItem = new vscode.NotebookCellStatusBarItem(
+          '$(book) Pre-study',
+          vscode.NotebookCellStatusBarAlignment.Right
+        );
+        prestudyItem.priority = 90;
+        prestudyItem.command = {
+          command: 'CellMate.prestudyGuide',
+          title: 'Pre-study Guide',
+          arguments: [cell]
+        };
+        prestudyItem.tooltip = 'Get prerequisite knowledge guide based on course materials';
+        items.push(prestudyItem);
       }
       if (cell.document.languageId === 'markdown') {
         const speechItem = new vscode.NotebookCellStatusBarItem(
@@ -1062,7 +1289,7 @@ export function activate(ctx: vscode.ExtensionContext) {
       const showAll = cfg.get<boolean>('showButtonInAllMarkdown')
       const text = cell.document.getText().toLowerCase()
       const containsFeedback = text.includes('**feedback**') || text.includes('**🤖feedback expansion**')
-      if(cell.kind === vscode.NotebookCellKind.Markup && (showAll || containsFeedback)){
+      if (cell.kind === vscode.NotebookCellKind.Markup && (showAll || containsFeedback)) {
         const cfg = vscode.workspace.getConfiguration('CellMate');
         const mode = cfg.get<string>('feedbackMode');
 
@@ -1072,13 +1299,13 @@ export function activate(ctx: vscode.ExtensionContext) {
             : '📖 Expand | ➤ Explain';
 
         const markdownItem = new vscode.NotebookCellStatusBarItem(
-        label,
-        vscode.NotebookCellStatusBarAlignment.Right
+          label,
+          vscode.NotebookCellStatusBarAlignment.Right
         );
         markdownItem.command = {
-          command : 'CellMate.explainMarkdownCell',
+          command: 'CellMate.explainMarkdownCell',
           title: 'Expand or Explain Feedback Markdown',
-          arguments:[cell]
+          arguments: [cell]
         }
         markdownItem.priority = 100;
         markdownItem.tooltip = `Use AI to ${mode} the feedback`
@@ -1172,7 +1399,7 @@ export function activate(ctx: vscode.ExtensionContext) {
 
           const possibleKeys = ['problem_description', 'problem', 'exercise_description', 'task'];
           let problemDescription = '';
-          
+
           for (const key of possibleKeys) {
             if (placeholderMap.has(key)) {
               problemDescription = placeholderMap.get(key) || '';
@@ -1200,7 +1427,7 @@ export function activate(ctx: vscode.ExtensionContext) {
             prompt = fillPromptTemplate(standardPrompt, placeholderMap, editor.notebook);
             console.log('Using standard prompt without problem description');
           }
-          
+
           console.log('Problem description found:', problemDescription ? 'Yes' : 'No');
           console.log('Problem description length:', problemDescription.length);
 
@@ -1228,7 +1455,7 @@ export function activate(ctx: vscode.ExtensionContext) {
             const isMac = process.platform === 'darwin';
             const shortcut = isMac ? 'Cmd+Shift+P' : 'Ctrl+Shift+P';
 
-            const content = `# **🆘 Error Helper**
+            const content = `# **Error Helper**
 
 ${feedback}
 
@@ -1296,7 +1523,7 @@ ${feedback}
 
         const editor = vscode.window.activeNotebookEditor;
         let problemDescription = '';
-        
+
         if (editor) {
           // Extract placeholders
           const placeholderKeys = new Set(['problem_description', 'problem', 'exercise_description', 'task']);
@@ -1366,6 +1593,27 @@ ${feedback}
         // 1. Sync GitHub repository
         await syncGitRepo();
 
+        // Build RAG index if knowledge base exists and RAG is enabled
+        const useRAG = cfg.get<boolean>('useRAG', false);
+        const ragMode = cfg.get<string>('ragMode', 'keyword');
+        if (useRAG && hasKnowledgeBase()) {
+          if (ragMode === 'chromadb') {
+            const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
+            try {
+              const indexed = await indexToChromaDB(LOCAL_REPO_PATH, ragServerUrl);
+              log(`ChromaDB: indexed ${indexed} chunks`);
+            } catch (err: any) {
+              log('ChromaDB indexing failed:', err.message);
+              vscode.window.showWarningMessage(`ChromaDB RAG server unreachable at ${ragServerUrl}. RAG context will be empty.`);
+            }
+          } else if (ragMode === 'semantic') {
+            const embModel = cfg.get<string>('embeddingModel', 'nomic-embed-text:137m-v1.5-fp16');
+            await buildSemanticIndex(LOCAL_REPO_PATH, apiUrl, apiKey, embModel);
+          } else {
+            await buildRagIndex(LOCAL_REPO_PATH);
+          }
+        }
+
         // 2. Get prompt content
         const promptIdFromCell = extractPromptId(code);
         const promptId = promptIdFromCell || cfg.get<string>('templateId', '');
@@ -1383,15 +1631,30 @@ ${feedback}
 
         // 3. Initialize analysis variable
         let analysis = '';
+        let visualTestSummary = '';
 
         // 4. If useHiddenTests is enabled, get test content and run tests
         if (useHiddenTests) {
           const exId = extractExerciseId(code);
+          // Track exercise ID for feedback history (used later)
+          var currentExerciseId = exId || '';
           if (!exId) {
-            vscode.window.showWarningMessage('No # EXERCISE_ID found in code');
+            const exercises = await listLocalExercises();
+            const ids = exercises.map((e: any) => e.id).join(', ');
+            vscode.window.showWarningMessage(`No # EXERCISE_ID found. Please add “# EXERCISE_ID: [ID]” in the code cell. Available IDs: ${ids || 'None'}`);
             return;
           }
-          const { test, metadata } = await getTestFiles(exId);
+
+          let testFiles;
+          try {
+            testFiles = await getTestFiles(exId);
+          } catch (e: any) {
+            const exercises = await listLocalExercises();
+            const ids = exercises.map((e: any) => e.id).join(', ');
+            vscode.window.showErrorMessage(`Exercise '${exId}' not found or invalid. Available IDs: ${ids || 'None'}`);
+            return;
+          }
+          const { test, metadata } = testFiles;
 
           // Get notebook Python path
           const pythonPath = await getNotebookPythonPath();
@@ -1401,13 +1664,10 @@ ${feedback}
             return;
           }
 
-          const requiredPkgs = ['pytest', 'pytest-json-report'];
-          for (const pkg of requiredPkgs) {
-            const hasPkg = await checkPytestInstalled(pythonPath, pkg);
-            if (!hasPkg) {
-              const ok = await ensurePythonDeps(pythonPath, [pkg]);
-              if (!ok) return;
-            }
+          // Prepare the virtual environment with system-site-packages
+          const venvPython = await prepareVenv(pythonPath);
+          if (!venvPython) {
+            return;
           }
 
           // Prepare resource directories (e.g., data/) so user code can read files
@@ -1416,12 +1676,15 @@ ${feedback}
             // 1) From synced repo tests folder
             const repoDataDir = path.join(LOCAL_REPO_PATH, 'tests', exId, 'data');
             resourceDirs.push(repoDataDir);
-          } catch {}
+          } catch { }
 
           // Run tests locally (with internal timeout guard and resource copy)
-          const testResult = await runLocalTest(code, test, pythonPath, 15000, resourceDirs);
+          const testResult = await runLocalTest(code, test, venvPython, 15000, resourceDirs);
           // log('=== test result Debug ===');
           log(testResult)
+
+          // Generate visual test summary for student-facing display
+          visualTestSummary = generateVisualTestSummary(testResult);
 
           // Parse test results and generate analysis
           if (testResult.report && testResult.report.tests) {
@@ -1510,6 +1773,75 @@ ${feedback}
           placeholderMap.set('hidden_tests', '');
         }
 
+        // Feedback history: inject past submission records into the prompt
+        const exIdForHistory = extractExerciseId(code) || '';
+        if (exIdForHistory) {
+          const historyText = formatHistoryForPrompt(exIdForHistory);
+          placeholderMap.set('submission_history', historyText);
+          // Scaffolding: generate tier-specific instructions based on attempt pattern
+          const scaffolding = formatScaffoldingInstructions(exIdForHistory);
+          placeholderMap.set('scaffolding_instructions', scaffolding);
+        } else {
+          placeholderMap.set('submission_history', '');
+          placeholderMap.set('scaffolding_instructions', '');
+        }
+
+        // Extract test stats for the feedback record
+        let recordTestsPassed = 0;
+        let recordTestsFailed = 0;
+        if (useHiddenTests && analysis) {
+          const passMatch = analysis.match(/(\d+) tests passed/);
+          const summaryMatch = analysis.match(/(\d+) tests, (\d+) passed, (\d+) failed/);
+          if (summaryMatch) {
+            recordTestsPassed = parseInt(summaryMatch[2]);
+            recordTestsFailed = parseInt(summaryMatch[3]);
+          } else if (passMatch) {
+            recordTestsPassed = parseInt(passMatch[1]);
+          }
+        }
+
+        // RAG: retrieve relevant course materials if enabled
+        if (useRAG) {
+          const ragQuery = code + '\n' + analysis;
+          let ragContext = '';
+
+          if (ragMode === 'chromadb') {
+            // ChromaDB backend mode
+            try {
+              const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
+              ragContext = await queryChromaDB(ragQuery, ragServerUrl, 3);
+              log('RAG context retrieved via ChromaDB');
+            } catch (err: any) {
+              log('ChromaDB query failed:', err.message);
+            }
+          } else {
+            // Local modes: keyword or semantic
+            const ragIndex = loadRagIndex();
+            if (ragIndex.length > 0) {
+              // Semantic mode: embed query and use cosine similarity
+              if (ragMode === 'semantic' && ragIndex[0]?.embedding) {
+                try {
+                  const embModel = cfg.get<string>('embeddingModel', 'nomic-embed-text:137m-v1.5-fp16');
+                  const embUrl = deriveEmbeddingUrl(apiUrl);
+                  const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
+                  ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb);
+                  log('RAG context retrieved via semantic mode');
+                } catch (err: any) {
+                  log('Semantic RAG query failed, falling back to keyword mode:', err.message);
+                  ragContext = retrieveContext(ragQuery, ragIndex, 3);
+                }
+              } else {
+                // Keyword mode (BM25)            
+                ragContext = retrieveContext(ragQuery, ragIndex, 3);
+                log('RAG context retrieved via keyword mode');
+              }
+            }
+          }
+          placeholderMap.set('rag_context', ragContext);
+        } else {
+          placeholderMap.set('rag_context', '');
+        }
+
         // Fill only declared placeholders, keep others unchanged
         prompt = fillPromptTemplate(prompt, placeholderMap, editor.notebook);
         // log("Final prompt after filling placeholders:", prompt);
@@ -1520,86 +1852,107 @@ ${feedback}
         const fullPrompt = system_role + prompt;
         log("fullPrompt:", fullPrompt)
 
-        // Call the LLM interface
-        let feedback: string;
+        // Call the LLM interface with streaming output
+        const notebook = editor.notebook;
+        const cellIndex = cell.index;
         try {
-          // Check if using OpenAI-compatible endpoint
           const isOpenAIEndpoint = apiUrl.includes('/chat/completions');
 
           let body: any;
           if (isOpenAIEndpoint) {
-            // OpenAI format for /api/chat/completions
             body = {
               model: modelName,
-              messages: [
-                {
-                  role: "user",
-                  content: fullPrompt
-                }
-              ]
+              messages: [{ role: "user", content: fullPrompt }],
+              stream: true,
             };
           } else {
-            // Ollama format for /ollama/api/generate
             body = {
               model: modelName,
-              prompt: fullPrompt
+              prompt: fullPrompt,
+              stream: true,
             };
           }
 
-          // log('=== API Request Debug ===');
-          // log('API URL:', apiUrl);
-          // log('Model Name:', modelName);
-          // log('Is OpenAI Endpoint:', isOpenAIEndpoint);
-          // log('Request Body:', JSON.stringify(body, null, 2));
-          // log('=== End API Request Debug ===');
+          // Build the test summary header (only if tests were run)
+          const testHeader = (typeof visualTestSummary === 'string' && visualTestSummary)
+            ? visualTestSummary + '\n---\n\n'
+            : '';
 
-          const resp = await axios.post(
-            apiUrl,
-            body,
-            {
-                headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`
-                },
-                responseType: isOpenAIEndpoint ? 'json' : 'text'
-            }
-          );
+          // Insert an empty markdown cell immediately for streaming
+          await insertMarkdownCellBelow(notebook, cellIndex, `# **AI Feedback**\n\n${testHeader}⏳ Generating...`);
+          const targetCellIndex = cellIndex + 1;
 
-          // log('=== API Response Debug ===');
-          // log('Response Status:', resp.status);
-          // log('Response Headers:', resp.headers);
-          // log('=== End API Response Debug ===');
+          // Stream the response
+          const resp = await axios.post(apiUrl, body, {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+            },
+            responseType: 'text',
+            // Prevent axios from parsing the SSE stream as JSON
+            transformResponse: [(data: any) => data],
+          });
 
-          if (isOpenAIEndpoint) {
-            // Handle OpenAI format response
-            if (resp.data.choices && resp.data.choices[0] && resp.data.choices[0].message) {
-              feedback = resp.data.choices[0].message.content;
-            } else {
-              throw new Error('Invalid OpenAI response format');
-            }
-          } else {
-            // Handle Ollama streaming response
-            const lines = resp.data.split('\n').filter((line: string) => line.trim());
-            let fullResponse = '';
+          // Parse the SSE / NDJSON response
+          let fullFeedback = '';
+          const rawText: string = resp.data;
+          const lines = rawText.split('\n').filter((line: string) => line.trim());
 
-            for (const line of lines) {
-              try {
-                const jsonResponse = JSON.parse(line);
-                if (jsonResponse.response) {
-                  fullResponse += jsonResponse.response;
-                }
-              } catch (e) {
-                console.warn('Failed to parse JSON line:', line);
+          for (const line of lines) {
+            try {
+              let jsonStr = line;
+              // OpenAI SSE format: "data: {...}"
+              if (line.startsWith('data: ')) {
+                jsonStr = line.slice(6);
               }
-            }
+              if (jsonStr === '[DONE]') break;
 
-            if (!fullResponse) {
-              console.error('No valid response content found');
-              throw new Error('No valid response content received from API.');
+              const parsed = JSON.parse(jsonStr);
+
+              let chunk = '';
+              if (isOpenAIEndpoint) {
+                // OpenAI streaming: choices[0].delta.content
+                chunk = parsed.choices?.[0]?.delta?.content || '';
+              } else {
+                // Ollama streaming: response field
+                chunk = parsed.response || '';
+              }
+
+              if (chunk) {
+                fullFeedback += chunk;
+                // Update the cell content progressively (with test summary header)
+                const displayContent = `# **AI Feedback**\n\n${testHeader}${fullFeedback.replace(/\n/g, '  \n')}`;
+                await replaceMarkdownCellContent(notebook, targetCellIndex, displayContent);
+              }
+            } catch (parseErr) {
+              // Skip unparseable lines (e.g., keep-alive comments)
             }
-            feedback = fullResponse;
           }
-          // log('feedback:', feedback)
+
+          // Final update with complete content
+          if (!fullFeedback.trim()) {
+            throw new Error('No valid response content received from API.');
+          }
+          const finalContent = `# **AI Feedback**\n\n${testHeader}${fullFeedback.replace(/\n/g, '  \n')}`;
+          await replaceMarkdownCellContent(notebook, targetCellIndex, finalContent);
+          log('Streaming feedback complete');
+
+          // Save feedback record for iterative learning tracking
+          if (exIdForHistory) {
+            const level = extractLevel(fullFeedback);
+            const record: FeedbackRecord = {
+              timestamp: Date.now(),
+              exerciseId: exIdForHistory,
+              codeSnippet: code.substring(0, 500),
+              level,
+              feedbackSnippet: fullFeedback.substring(0, 300),
+              testsPassed: recordTestsPassed,
+              testsFailed: recordTestsFailed,
+            };
+            await addRecord(record);
+            const attemptNum = getHistory(exIdForHistory).length;
+            log(`Feedback history: saved attempt #${attemptNum} for ${exIdForHistory} [${level}]`);
+          }
 
         } catch (e: any) {
           let errorMessage = 'AI API call failed: ' + e.message;
@@ -1608,11 +1961,186 @@ ${feedback}
           }
           return vscode.window.showErrorMessage(errorMessage);
         }
+      }
+    )
+  );
 
+  // Template management commands
+  // ===== Pre-study Guide Command =====
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand(
+      'CellMate.prestudyGuide',
+      async (cell: vscode.NotebookCell) => {
+        const editor = vscode.window.activeNotebookEditor;
+        if (!editor) {
+          return vscode.window.showErrorMessage('No active Notebook editor');
+        }
+
+        const cfg = vscode.workspace.getConfiguration('CellMate');
+        const apiUrl = cfg.get<string>('apiUrl') || '';
+        const apiKey = cfg.get<string>('apiKey') || '';
+        const modelName = cfg.get<string>('modelName') || '';
+        const useRAG = cfg.get<boolean>('useRAG', false);
+        const ragMode = cfg.get<string>('ragMode', 'keyword');
+
+        if (!apiUrl || !apiKey || !modelName) {
+          return vscode.window.showErrorMessage('Please configure CellMate API URL, Key, and Model in settings.');
+        }
+
+        if (!useRAG) {
+          return vscode.window.showWarningMessage('Pre-study Guide requires RAG to be enabled. Please set CellMate.useRAG to true.');
+        }
+
+        const code = cell.document.getText();
+
+        // Extract exercise ID
+        const exId = extractExerciseId(code);
+
+        // Build a semantically rich query from exercise metadata
+        // instead of raw code (which has poor overlap with lecture materials)
+        let ragQuery = code;  // fallback: use code if no exercise metadata
+        let exerciseTitle = exId || 'Python Exercise';
+        let exerciseDesc = '';
+        if (exId) {
+          try {
+            const testFiles = await getTestFiles(exId);
+            const meta = testFiles.metadata;
+            if (meta.title) exerciseTitle = meta.title;
+            if (meta.description) exerciseDesc = meta.description;
+            // Compose query from title + description + hints for better retrieval
+            const parts: string[] = [];
+            if (meta.title) parts.push(meta.title);
+            if (meta.description) parts.push(meta.description);
+            if (Array.isArray(meta.hints)) parts.push(meta.hints.join(' '));
+            if (parts.length > 0) {
+              ragQuery = parts.join('\n');
+              log(`Pre-study RAG query built from metadata: "${ragQuery.substring(0, 100)}..."`);
+            }
+          } catch {
+            log('Could not load exercise metadata, using code as RAG query');
+          }
+        }
+
+        // Sync and build RAG index
+        await syncGitRepo();
+        if (!hasKnowledgeBase()) {
+          return vscode.window.showWarningMessage('No knowledge/ directory found in promptfolio. Pre-study Guide requires course materials.');
+        }
+
+        // Retrieve RAG context using the metadata-based query (3 chunks for pre-study to keep prompt concise)
+        // Pre-study Guide: exclude exercise description chunks (they contain only problem
+        // statements with no teaching value). This matches the evaluation benchmark behaviour.
+        let ragContext = '';
+        if (ragMode === 'chromadb') {
+          try {
+            const ragServerUrl = cfg.get<string>('ragServerUrl', 'http://localhost:8100');
+            // Indexing already happened during sync (L1603), no need to re-index here
+            ragContext = await queryChromaDB(ragQuery, ragServerUrl, 3, true);
+          } catch (err: any) {
+            log('ChromaDB query failed for prestudy:', err.message);
+          }
+        } else if (ragMode === 'semantic') {
+          try {
+            const embModel = cfg.get<string>('embeddingModel', 'nomic-embed-text:137m-v1.5-fp16');
+            await buildSemanticIndex(LOCAL_REPO_PATH, apiUrl, apiKey, embModel);
+            const ragIndex = loadRagIndex();
+            if (ragIndex.length > 0) {
+              const embUrl = deriveEmbeddingUrl(apiUrl);
+              const [queryEmb] = await embedTexts([ragQuery.substring(0, 2000)], embUrl, apiKey, embModel);
+              ragContext = retrieveContext(ragQuery, ragIndex, 3, queryEmb, true);
+            }
+          } catch (err: any) {
+            log('Semantic RAG failed for prestudy, falling back to keyword:', err.message);
+            await buildRagIndex(LOCAL_REPO_PATH);
+            const ragIndex = loadRagIndex();
+            ragContext = retrieveContext(ragQuery, ragIndex, 3, undefined, true);
+          }
+        } else {
+          await buildRagIndex(LOCAL_REPO_PATH);
+          const ragIndex = loadRagIndex();
+          ragContext = retrieveContext(ragQuery, ragIndex, 3, undefined, true);
+        }
+
+        if (!ragContext) {
+          return vscode.window.showWarningMessage('No relevant course materials found for this exercise.');
+        }
+
+        // Load the prestudy_guide prompt template
+        let promptContent: string;
+        try {
+          promptContent = await getPromptContent('prestudy_guide');
+        } catch {
+          return vscode.window.showErrorMessage('prestudy_guide.txt not found in promptfolio/prompts/. Please add it.');
+        }
+
+        // Fill placeholders
+        promptContent = promptContent
+          .replace(/\{\{exercise_id\}\}/g, exId || 'unknown')
+          .replace(/\{\{exercise_title\}\}/g, exerciseTitle)
+          .replace(/\{\{exercise_description\}\}/g, exerciseDesc)
+          .replace(/\{\{rag_context\}\}/g, ragContext);
+
+        log(`Pre-study prompt length: ${promptContent.length} chars`);
+
+        // Call LLM with streaming
         const notebook = editor.notebook;
         const cellIndex = cell.index;
-        const content = `# **AI Feedback**\n\n${feedback.replace(/\n/g, '  \n')}`;
-        await insertMarkdownCellBelow(notebook, cellIndex, content);
+
+        try {
+          const isOpenAIEndpoint = apiUrl.includes('/chat/completions');
+          const body: any = isOpenAIEndpoint
+            ? { model: modelName, messages: [{ role: "user", content: promptContent }], stream: true }
+            : { model: modelName, prompt: promptContent, stream: true };
+
+          await insertMarkdownCellBelow(notebook, cellIndex, '📖 **Pre-study Guide**\n\n⏳ Generating...');
+          const targetCellIndex = cellIndex + 1;
+
+          const resp = await axios.post(apiUrl, body, {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+            },
+            responseType: 'text',
+            transformResponse: [(data: any) => data],
+            timeout: 120000, // 120s timeout to prevent hanging
+          });
+
+          let fullResponse = '';
+          const rawText: string = resp.data;
+          const lines = rawText.split('\n').filter((line: string) => line.trim());
+
+          for (const line of lines) {
+            try {
+              let jsonStr = line;
+              if (line.startsWith('data: ')) jsonStr = line.slice(6);
+              if (jsonStr === '[DONE]') break;
+
+              const parsed = JSON.parse(jsonStr);
+              const chunk = isOpenAIEndpoint
+                ? (parsed.choices?.[0]?.delta?.content || '')
+                : (parsed.response || '');
+
+              if (chunk) {
+                fullResponse += chunk;
+                await replaceMarkdownCellContent(notebook, targetCellIndex,
+                  `📖 **Pre-study Guide**\n\n${fullResponse.replace(/\n/g, '  \n')}`);
+              }
+            } catch { /* skip unparseable */ }
+          }
+
+          if (!fullResponse.trim()) {
+            throw new Error('No response from API.');
+          }
+          await replaceMarkdownCellContent(notebook, targetCellIndex,
+            `📖 **Pre-study Guide**\n\n${fullResponse.replace(/\n/g, '  \n')}`);
+
+        } catch (e: any) {
+          log('Pre-study Guide error:', e.message);
+          if (e.code === 'ECONNABORTED') {
+            return vscode.window.showErrorMessage('Pre-study Guide timed out. The LLM may be overloaded — please try again.');
+          }
+          return vscode.window.showErrorMessage('Pre-study Guide failed: ' + e.message);
+        }
       }
     )
   );
@@ -1671,7 +2199,7 @@ ${feedback}
           vscode.window.showInformationMessage('No available templates');
           return;
         }
-        // 生成下拉选项
+        // Generate dropdown options
         const items = templates.map(t => ({
           label: t.id,
           description: t.filename
@@ -1680,7 +2208,7 @@ ${feedback}
           placeHolder: 'Please select a template'
         });
         if (pick) {
-          // 写入配置
+          // Write configuration
           await vscode.workspace.getConfiguration('CellMate')
             .update('templateId', pick.label, vscode.ConfigurationTarget.Global);
           vscode.window.showInformationMessage(`Selected template: ${pick.label}`);
@@ -1719,7 +2247,7 @@ ${feedback}
             return;
           }
 
-          // 生成下拉选项
+          // Generate dropdown options
           const items = templates.map(t => ({
             label: t.id,
             description: t.filename
@@ -1751,9 +2279,9 @@ ${feedback}
     })
   );
 
-  async function replaceCellContent(doc:vscode.TextDocument, content:string){
+  async function replaceCellContent(doc: vscode.TextDocument, content: string) {
     const edit = new vscode.WorkspaceEdit();
-    const start = new vscode.Position(0,0);
+    const start = new vscode.Position(0, 0);
     const end = doc.lineAt(doc.lineCount - 1).range.end;
     const fullRange = new vscode.Range(start, end);
     edit.replace(doc.uri, fullRange, content);
@@ -1764,47 +2292,47 @@ ${feedback}
     let cleaned = text;
 
     // Remove common redundant phrases generated by LLMs
-    cleaned = cleaned.replace(/^.*?(Expanded Feedback|Feedback Expansion|Here.*feedback|Based on.*feedback).*$/gmi, '');    
+    cleaned = cleaned.replace(/^.*?(Expanded Feedback|Feedback Expansion|Here.*feedback|Based on.*feedback).*$/gmi, '');
     // Remove extra blank lines
     cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
 
     // Fix unmatched markdown symbol
     const count = (str: string) => (cleaned.match(new RegExp(str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-    
+
     // Prioritize fixing unmatched **
     if (count('\\*\\*') % 2 !== 0) cleaned += '**';
-    
+
     // Then fix single *
     const singleStarCount = count('\\*') - 2 * count('\\*\\*');
     if (singleStarCount % 2 !== 0) cleaned += '*';
-    
+
     // Fix unmatched backticks `
     if (count('`') % 2 !== 0) cleaned += '`';
 
-     // Do not touch patterns related to **
+    // Do not touch patterns related to **
     cleaned = cleaned.replace(/\\([_`#])/g, '$1');
     cleaned = cleaned.replace(/\\n/g, '\n');
 
     return cleaned.trim();
-}
+  }
 
-type ExplanationCtx = {
-  wholeFeedback?: string;    
-};
+  type ExplanationCtx = {
+    wholeFeedback?: string;
+  };
 
-const explanationStore = new Map<string, ExplanationCtx>();
+  const explanationStore = new Map<string, ExplanationCtx>();
 
-function setExplanationCtx(cellUri: string, ctx: ExplanationCtx) {
-  explanationStore.set(cellUri, ctx);
-}
-function getExplanationCtx(cellUri: string) {
-  return explanationStore.get(cellUri);
-}
+  function setExplanationCtx(cellUri: string, ctx: ExplanationCtx) {
+    explanationStore.set(cellUri, ctx);
+  }
+  function getExplanationCtx(cellUri: string) {
+    return explanationStore.get(cellUri);
+  }
   // Markdown cell
   ctx.subscriptions.push(
     vscode.commands.registerCommand(
       'CellMate.explainMarkdownCell',
-      async(cell: vscode.NotebookCell) => {
+      async (cell: vscode.NotebookCell) => {
         const editor = vscode.window.activeNotebookEditor;
         if (!editor) {
           return vscode.window.showErrorMessage('No activity')
@@ -1848,15 +2376,15 @@ function getExplanationCtx(cellUri: string) {
             return vscode.window.showErrorMessage('Please select the sentence you want explained.')
           }
           inputText = selectedText;
-          header =  `**🤖Explanation** for:**_"${selectedText}"_**`
+          header = `**🤖Explanation** for:**_"${selectedText}"_**`
         } else {
           return vscode.window.showErrorMessage(`Unsupported mode: ${mode}`);
         }
 
         await syncGitRepo()
         const promptTpl = await getPromptContent(mode);
-        
-        let prompt:string 
+
+        let prompt: string
         switch (mode) {
           case "Expand": {
             prompt = promptTpl.replace('{{content}}', inputText);
@@ -1869,7 +2397,7 @@ function getExplanationCtx(cellUri: string) {
           default:
             prompt = promptTpl;
         }
-        
+
         // extract all placeholders
         const placeholderKeys = getTemplatePlaceholderKeys(prompt);
 
@@ -1901,14 +2429,14 @@ function getExplanationCtx(cellUri: string) {
 
         try {
           const body = {
-            model : modelName,
+            model: modelName,
             prompt: prompt,
-            stream : true
+            stream: true
           };
 
           const resp = await axios.post(apiUrl, body, {
             headers: {
-              'content-Type' : 'application/json',
+              'content-Type': 'application/json',
               Authorization: `Bearer ${apiKey}`
             },
             responseType: 'stream'
@@ -1919,16 +2447,16 @@ function getExplanationCtx(cellUri: string) {
           for await (const chunk of resp.data) {
             chunkCount++;
             const lines = chunk.toString().split('\n');
-            
+
             for (const line of lines) {
               const trimmedLine = line.trim();
               if (!trimmedLine) continue;
-              
+
               try {
                 const jsonResponse = JSON.parse(trimmedLine);
                 if (jsonResponse.response) {
                   accumulated += jsonResponse.response;
-                  
+
                   const safeText = cleanMarkdown(accumulated);
                   const updatedContent = `${header}\n\n${safeText.replace(/\n/g, '  \n')}\n\n${generatingNote}`;
                   await replaceCellContent(doc, updatedContent);
@@ -1947,13 +2475,13 @@ function getExplanationCtx(cellUri: string) {
           const borderColor = mode === 'Expand' ? '#6ec5d2ff' : '#4CAF50';
           const wrappedContent = `<div style="box-sizing:border-box; border: 3px solid ${borderColor}; padding: 10px ;border-radius:8px;">\n\n${header}\n\n${finalText.replace(/\n/g, '  \n')}\n\n</div>`;
           const finalContent = `${wrappedContent}\n`;
-          await replaceCellContent(doc,finalContent);
+          await replaceCellContent(doc, finalContent);
 
           const cellUri = newCell.document.uri.toString();
           setExplanationCtx(cellUri, {
-            wholeFeedback: fullText,              
+            wholeFeedback: fullText,
           });
-        } catch (e:any) {
+        } catch (e: any) {
           console.error("AI Extension fail:", e);
           const errorMsg = `${header}\n\n❌ AI generation failed:\n\n\`${e.message}\``;
           await replaceCellContent(doc, errorMsg);
@@ -1971,7 +2499,7 @@ function getExplanationCtx(cellUri: string) {
       if (!editor) {
         return vscode.window.showErrorMessage('No active notebook editor');
       }
-      
+
       const cellUri = cell.document.uri.toString();
       const ctxData = getExplanationCtx?.(cellUri);
 
@@ -1980,8 +2508,8 @@ function getExplanationCtx(cellUri: string) {
       let followupPromptTpl = '';
       try {
         followupPromptTpl = await getPromptContent('followup');
-      } catch (e:any) {
-        vscode.window.showErrorMessage('⚠️ Failed to load Followup prompt: ' + e.message);
+      } catch (e: any) {
+        vscode.window.showErrorMessage('Failed to load Followup prompt: ' + e.message);
       }
       const panel = vscode.window.createWebviewPanel(
         'followUpChat',
@@ -1992,7 +2520,7 @@ function getExplanationCtx(cellUri: string) {
 
 
       function getHTML() {
-      return `<!DOCTYPE html>
+        return `<!DOCTYPE html>
       <html lang="en">
       <head>
         <meta charset="UTF-8">
@@ -2044,7 +2572,7 @@ function getExplanationCtx(cellUri: string) {
             border: 1px solid #e5e7eb;
           }
 
-          /* 防溢出优化 */
+          /* Overflow optimization */
           .message code {
             white-space: pre-wrap;
             word-break: break-word;
@@ -2066,7 +2594,7 @@ function getExplanationCtx(cellUri: string) {
           .message th, .message td {
             word-break: break-word;
           }
-          /* 紧凑 Markdown 样式 */
+          /* Compact Markdown style */
           .message.assistant p {
             margin: 0.2em 0;
             line-height: 1.4;
@@ -2262,7 +2790,7 @@ function getExplanationCtx(cellUri: string) {
         </script>
       </body>
       </html>`;
-        }
+      }
 
       panel.webview.html = getHTML();
 
@@ -2271,68 +2799,68 @@ function getExplanationCtx(cellUri: string) {
         //   const question = msg.question;
         //   conversation.push({ role: 'user', content: question });
 
-          if (msg.type !== 'ask') return;
+        if (msg.type !== 'ask') return;
 
-          const question = String(msg.question ?? '');
-          const wholeFeedback = ctxData?.wholeFeedback ?? '';
+        const question = String(msg.question ?? '');
+        const wholeFeedback = ctxData?.wholeFeedback ?? '';
 
-          // 直接拼接 prompt
-          const fullPrompt = followupPromptTpl
-            .replace('{{explanationOutput}}', explanationOutput)
-            .replace('{{wholeFeedback}}', wholeFeedback)
-            .replace('{{followupQuestion}}', question);
+        // Concatenate prompt directly
+        const fullPrompt = followupPromptTpl
+          .replace('{{explanationOutput}}', explanationOutput)
+          .replace('{{wholeFeedback}}', wholeFeedback)
+          .replace('{{followupQuestion}}', question);
 
-          const cfg = vscode.workspace.getConfiguration('CellMate');
-          const apiUrl = cfg.get<string>('apiUrl') || '';
-          const apiKey = cfg.get<string>('apiKey') || '';
-          const modelName = cfg.get<string>('modelName') || '';
+        const cfg = vscode.workspace.getConfiguration('CellMate');
+        const apiUrl = cfg.get<string>('apiUrl') || '';
+        const apiKey = cfg.get<string>('apiKey') || '';
+        const modelName = cfg.get<string>('modelName') || '';
 
-          try {
-          const resp = await axios.post(apiUrl, { model: modelName, prompt: fullPrompt, stream:false }, {
+        try {
+          const resp = await axios.post(apiUrl, { model: modelName, prompt: fullPrompt, stream: false }, {
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
           });
 
           const answer = resp.data?.message?.content || resp.data?.response || 'No response received';
           panel.webview.postMessage({ type: 'answer', content: answer });
-          } catch (e:any) {
-            panel.webview.postMessage({ type: 'answer', content: `❌ Request failed: ${e.message}` });
-          }
+        } catch (e: any) {
+          panel.webview.postMessage({ type: 'answer', content: `❌ Request failed: ${e.message}` });
+        }
       });
     })
   );
 
   ctx.subscriptions.push(
     vscode.notebooks.registerNotebookCellStatusBarItemProvider('jupyter-notebook', {
-    provideCellStatusBarItems(cell, _token) {
-      const items: vscode.NotebookCellStatusBarItem[] = [];
+      provideCellStatusBarItems(cell, _token) {
+        const items: vscode.NotebookCellStatusBarItem[] = [];
 
-      if (cell.kind === vscode.NotebookCellKind.Markup) {
-        const text = cell.document.getText();
+        if (cell.kind === vscode.NotebookCellKind.Markup) {
+          const text = cell.document.getText();
 
-        // Explanation cell
-        if (text.includes('**🤖Explanation** for:')) {
-          const item = new vscode.NotebookCellStatusBarItem(
-            '💬 Ask follow-up',
-            vscode.NotebookCellStatusBarAlignment.Right
-          );
-          item.command = 'CellMate.askFollowUpFromButton';
-          item.tooltip = 'Ask a follow-up question about this explanation';
-          items.push(item);
-        };
+          // Explanation cell
+          if (text.includes('**🤖Explanation** for:')) {
+            const item = new vscode.NotebookCellStatusBarItem(
+              '💬 Ask follow-up',
+              vscode.NotebookCellStatusBarAlignment.Right
+            );
+            item.command = 'CellMate.askFollowUpFromButton';
+            item.tooltip = 'Ask a follow-up question about this explanation';
+            items.push(item);
+          };
 
-        // Feeback Expansion cell
-        if (text.includes('**🤖Feedback Expansion**')){
-          const item = new vscode.NotebookCellStatusBarItem(
-            '💬 Ask follow-up',
-            vscode.NotebookCellStatusBarAlignment.Right
-          );
-          item.command = 'CellMate.askFollowUpFromButton';
-          item.tooltip = 'Ask a follow-up question about this explanation';
-          items.push(item);
+          // Feeback Expansion cell
+          if (text.includes('**🤖Feedback Expansion**')) {
+            const item = new vscode.NotebookCellStatusBarItem(
+              '💬 Ask follow-up',
+              vscode.NotebookCellStatusBarAlignment.Right
+            );
+            item.command = 'CellMate.askFollowUpFromButton';
+            item.tooltip = 'Ask a follow-up question about this explanation';
+            items.push(item);
+          }
         }
+        return items;
       }
-      return items;
-    }
     })
   );
 }
@@ -2342,5 +2870,6 @@ export function deactivate(): void {
   if (ErrorHelperPanel.currentPanel) {
     ErrorHelperPanel.currentPanel.dispose();
   }
+  stopRagServer();
   killLocal();
 }

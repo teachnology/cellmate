@@ -1,0 +1,601 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import * as crypto from 'crypto';
+import axios from 'axios';
+
+const RAG_CACHE_DIR = path.join(os.tmpdir(), 'cellmate_rag');
+const RAG_INDEX_FILE = path.join(RAG_CACHE_DIR, 'index.json');
+
+// English stopwords to filter out during tokenization
+const STOPWORDS = new Set([
+  'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+  'should', 'may', 'might', 'shall', 'can', 'need', 'dare', 'ought',
+  'used', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
+  'as', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
+  'between', 'out', 'off', 'over', 'under', 'again', 'further', 'then',
+  'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'each',
+  'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no',
+  'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very',
+  'just', 'because', 'but', 'and', 'or', 'if', 'while', 'about', 'up',
+  'that', 'this', 'it', 'its', 'i', 'me', 'my', 'we', 'our', 'you',
+  'your', 'he', 'him', 'his', 'she', 'her', 'they', 'them', 'their',
+  'what', 'which', 'who', 'whom', 'these', 'those',
+]);
+
+/**
+ * A single chunk of knowledge content
+ */
+export interface RagChunk {
+  id: string;          // hash-based unique ID
+  source: string;      // relative path, e.g., "lectures/week2_loops.md"
+  title: string;       // heading or filename
+  content: string;     // chunk text
+  tokens: string[];    // lowercased, deduplicated keyword tokens
+  embedding?: number[];// dense vector from embedding API (semantic mode)
+}
+
+/**
+ * Tokenize text into lowercase keywords, filtering out stopwords and short tokens
+ */
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9_]+/)
+    .filter(t => t.length > 1 && !STOPWORDS.has(t));
+}
+
+/**
+ * Generate a short hash ID for a chunk
+ */
+function hashId(source: string, title: string): string {
+  return crypto.createHash('md5').update(source + '::' + title).digest('hex').slice(0, 12);
+}
+
+/**
+ * Chunk a Markdown file by ## headings.
+ * If a section exceeds maxWords, split further on double newlines.
+ */
+function chunkMarkdown(content: string, source: string, maxWords: number = 500): RagChunk[] {
+  const chunks: RagChunk[] = [];
+  // Split on ## headings, keeping the heading with its section
+  const sections = content.split(/^(?=## )/m);
+
+  for (const section of sections) {
+    const trimmed = section.trim();
+    if (!trimmed) continue;
+
+    // Extract title from heading line, or use filename
+    const headingMatch = trimmed.match(/^##\s+(.+)$/m);
+    const title = headingMatch ? headingMatch[1].trim() : path.basename(source);
+
+    const words = trimmed.split(/\s+/);
+    if (words.length <= maxWords) {
+      const tokens = [...new Set(tokenize(trimmed))];
+      chunks.push({
+        id: hashId(source, title),
+        source,
+        title,
+        content: trimmed,
+        tokens,
+      });
+    } else {
+      // Split large sections on double newlines
+      const paragraphs = trimmed.split(/\n\n+/);
+      let buffer = '';
+      let partIdx = 0;
+      for (const para of paragraphs) {
+        if (buffer && (buffer + '\n\n' + para).split(/\s+/).length > maxWords) {
+          const subTitle = `${title} (part ${partIdx + 1})`;
+          const tokens = [...new Set(tokenize(buffer))];
+          chunks.push({
+            id: hashId(source, subTitle),
+            source,
+            title: subTitle,
+            content: buffer.trim(),
+            tokens,
+          });
+          buffer = para;
+          partIdx++;
+        } else {
+          buffer = buffer ? buffer + '\n\n' + para : para;
+        }
+      }
+      if (buffer.trim()) {
+        const subTitle = partIdx > 0 ? `${title} (part ${partIdx + 1})` : title;
+        const tokens = [...new Set(tokenize(buffer))];
+        chunks.push({
+          id: hashId(source, subTitle),
+          source,
+          title: subTitle,
+          content: buffer.trim(),
+          tokens,
+        });
+      }
+    }
+  }
+
+  return chunks;
+}
+
+/**
+ * Chunk a Python file by top-level def/class blocks
+ */
+function chunkPython(content: string, source: string): RagChunk[] {
+  const chunks: RagChunk[] = [];
+  // Split on top-level function/class definitions (lines starting at column 0)
+  const blocks = content.split(/^(?=(?:def |class ))/m);
+
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+
+    // Extract function/class name as title
+    const nameMatch = trimmed.match(/^(?:def|class)\s+(\w+)/);
+    const title = nameMatch ? nameMatch[1] : path.basename(source);
+
+    const tokens = [...new Set(tokenize(trimmed))];
+    chunks.push({
+      id: hashId(source, title),
+      source,
+      title,
+      content: trimmed,
+      tokens,
+    });
+  }
+
+  // If no def/class found, treat entire file as one chunk
+  if (chunks.length === 0 && content.trim()) {
+    const title = path.basename(source);
+    const tokens = [...new Set(tokenize(content))];
+    chunks.push({
+      id: hashId(source, title),
+      source,
+      title,
+      content: content.trim(),
+      tokens,
+    });
+  }
+
+  return chunks;
+}
+
+/**
+ * Parse a Jupyter Notebook (.ipynb) file and chunk by section headings (##).
+ * Groups markdown explanations together with their associated code examples
+ * into coherent, topic-level learning units.
+ * Automatically filters out hidden test boilerplate cells.
+ */
+function chunkNotebook(content: string, source: string, maxWords: number = 600): RagChunk[] {
+  const chunks: RagChunk[] = [];
+
+  let notebook: any;
+  try {
+    notebook = JSON.parse(content);
+  } catch {
+    return chunks;
+  }
+
+  if (!notebook.cells || !Array.isArray(notebook.cells)) return chunks;
+
+  let currentSectionTitle = path.basename(source);
+  let sectionBuffer = '';
+  let startCellIdx = 0;
+
+  function isHiddenTestCell(text: string): boolean {
+    return text.includes('BEGIN HIDDEN TESTS') || text.includes('END HIDDEN TESTS');
+  }
+
+  function flushCurrentSection(endIdx: number) {
+    const trimmed = sectionBuffer.trim();
+    if (!trimmed) return;
+    const tokens = [...new Set(tokenize(trimmed))];
+    const sectionSource = `${source} [cells ${startCellIdx}-${endIdx}]`;
+    chunks.push({
+      id: hashId(source, currentSectionTitle + `_${startCellIdx}`),
+      source: sectionSource,
+      title: currentSectionTitle,
+      content: trimmed,
+      tokens,
+    });
+    sectionBuffer = '';
+    startCellIdx = endIdx + 1;
+  }
+
+  for (let i = 0; i < notebook.cells.length; i++) {
+    const cell = notebook.cells[i];
+    const cellSource = Array.isArray(cell.source) ? cell.source.join('') : (cell.source || '');
+    if (!cellSource.trim()) continue;
+
+    // Filter out hidden test assertions
+    if (isHiddenTestCell(cellSource)) continue;
+
+    const cellType = cell.cell_type;
+
+    if (cellType === 'markdown') {
+      const headingMatch = cellSource.match(/^##\s+(.+)$/m);
+      if (headingMatch) {
+        // Flush existing buffer when encountering a new section heading
+        if (sectionBuffer.trim()) {
+          flushCurrentSection(i - 1);
+        }
+        currentSectionTitle = headingMatch[1].trim();
+        sectionBuffer = cellSource + '\n\n';
+        startCellIdx = i;
+        continue;
+      }
+      sectionBuffer += cellSource + '\n\n';
+    } else if (cellType === 'code') {
+      sectionBuffer += `\`\`\`python\n${cellSource.trim()}\n\`\`\`\n\n`;
+    }
+
+    // Split if section exceeds maxWords to avoid oversized context
+    if (sectionBuffer.split(/\s+/).length > maxWords) {
+      flushCurrentSection(i);
+    }
+  }
+
+  // Flush remaining buffer
+  if (sectionBuffer.trim()) {
+    flushCurrentSection(notebook.cells.length - 1);
+  }
+
+  return chunks;
+}
+
+/**
+ * Recursively collect all files from a directory with given extensions
+ */
+function collectFiles(dir: string, extensions: string[]): string[] {
+  const results: string[] = [];
+  if (!fs.existsSync(dir)) return results;
+
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...collectFiles(fullPath, extensions));
+    } else if (extensions.some(ext => entry.name.endsWith(ext))) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
+
+/**
+ * Build the RAG index from the knowledge/ directory in the synced repo.
+ * Chunks .md files by heading and .py files by function/class definitions.
+ * Caches the index as JSON in the temp directory.
+ */
+export async function buildRagIndex(repoPath: string): Promise<RagChunk[]> {
+  const knowledgeDir = path.join(repoPath, 'knowledge');
+  if (!fs.existsSync(knowledgeDir)) return [];
+
+  const files = collectFiles(knowledgeDir, ['.md', '.py', '.txt', '.ipynb']);
+  const allChunks: RagChunk[] = [];
+
+  for (const filePath of files) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const relativePath = path.relative(knowledgeDir, filePath);
+
+    if (filePath.endsWith('.ipynb')) {
+      allChunks.push(...chunkNotebook(content, relativePath));
+    } else if (filePath.endsWith('.py')) {
+      allChunks.push(...chunkPython(content, relativePath));
+    } else {
+      // .md and .txt files use markdown chunking
+      allChunks.push(...chunkMarkdown(content, relativePath));
+    }
+  }
+
+  // Cache the index to disk
+  if (!fs.existsSync(RAG_CACHE_DIR)) {
+    fs.mkdirSync(RAG_CACHE_DIR, { recursive: true });
+  }
+  fs.writeFileSync(RAG_INDEX_FILE, JSON.stringify(allChunks, null, 2), 'utf8');
+
+  return allChunks;
+}
+
+// ======================== Semantic RAG (Embedding) ========================
+
+/**
+ * Compute cosine similarity between two vectors.
+ * Note: If both vectors are pre-normalized (unit length), this reduces
+ * to a simple dot product. SentenceTransformers with normalize_embeddings=True
+ * produces unit vectors, so the norm computation below is a safety fallback.
+ */
+export function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/**
+ * Derive the embedding API URL from the user's existing LLM apiUrl.
+ * - OpenAI-compatible: /v1/chat/completions → /v1/embeddings
+ * - Ollama: /api/generate → /api/embed
+ */
+export function deriveEmbeddingUrl(apiUrl: string): string {
+  if (apiUrl.includes('/chat/completions')) {
+    // OpenAI-compatible: replace /chat/completions with /embeddings
+    return apiUrl.replace(/\/chat\/completions.*/, '/embeddings');
+  }
+  if (apiUrl.includes('/api/generate')) {
+    // Ollama: replace /api/generate with /api/embed
+    return apiUrl.replace(/\/api\/generate.*/, '/api/embed');
+  }
+  // Fallback: assume OpenAI-compatible, append /v1/embeddings
+  return apiUrl.replace(/\/$/, '') + '/v1/embeddings';
+}
+
+/**
+ * Batch-embed an array of texts via the embedding API.
+ * Supports both OpenAI response format and Ollama response format.
+ * Returns an array of embedding vectors (one per input text).
+ */
+export async function embedTexts(
+  texts: string[],
+  embeddingUrl: string,
+  apiKey: string,
+  model: string
+): Promise<number[][]> {
+  const isOllama = embeddingUrl.includes('/api/embed');
+
+  if (isOllama) {
+    // Ollama /api/embed accepts { model, input } → { embeddings: [[...], ...] }
+    const resp = await axios.post(embeddingUrl, {
+      model,
+      input: texts,
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 120000,
+    });
+    return resp.data.embeddings as number[][];
+  } else {
+    // OpenAI-compatible /v1/embeddings accepts { model, input } → { data: [{ embedding }] }
+    const resp = await axios.post(embeddingUrl, {
+      model,
+      input: texts,
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      timeout: 120000,
+    });
+    return resp.data.data.map((d: any) => d.embedding) as number[][];
+  }
+}
+
+/**
+ * Build a semantic RAG index: chunk files, embed all chunks via API, cache with vectors.
+ * Falls back to keyword-only index if embedding fails.
+ */
+export async function buildSemanticIndex(
+  repoPath: string,
+  apiUrl: string,
+  apiKey: string,
+  model: string
+): Promise<RagChunk[]> {
+  // First build the keyword index (chunking)
+  const chunks = await buildRagIndex(repoPath);
+  if (chunks.length === 0) return chunks;
+
+  // Check if ALL chunks already have embeddings cached (not just the first)
+  const allHaveEmbeddings = chunks.every(c => c.embedding && c.embedding.length > 0);
+  if (allHaveEmbeddings) {
+    return chunks;
+  }
+
+  const embeddingUrl = deriveEmbeddingUrl(apiUrl);
+
+  try {
+    // Batch embed in groups of 20 to avoid request size limits
+    const batchSize = 20;
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batch = chunks.slice(i, i + batchSize);
+      const texts = batch.map(c => c.content.substring(0, 2000)); // Truncate long chunks
+      const embeddings = await embedTexts(texts, embeddingUrl, apiKey, model);
+      for (let j = 0; j < batch.length; j++) {
+        batch[j].embedding = embeddings[j];
+      }
+    }
+
+    // Re-cache the index with embeddings
+    if (!fs.existsSync(RAG_CACHE_DIR)) {
+      fs.mkdirSync(RAG_CACHE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(RAG_INDEX_FILE, JSON.stringify(chunks, null, 2), 'utf8');
+  } catch (err: any) {
+    // If embedding fails, log warning and continue with keyword-only index
+    console.warn('Semantic RAG: embedding failed, falling back to keyword mode:', err.message);
+  }
+
+  return chunks;
+}
+
+/**
+ * Load the cached RAG index from disk.
+ * Returns an empty array if the cache does not exist.
+ */
+export function loadRagIndex(): RagChunk[] {
+  if (!fs.existsSync(RAG_INDEX_FILE)) return [];
+  try {
+    const data = fs.readFileSync(RAG_INDEX_FILE, 'utf8');
+    return JSON.parse(data) as RagChunk[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Retrieve the top-K most relevant chunks for a given query.
+ *
+ * If queryEmbedding is provided and the index contains embeddings,
+ * uses cosine similarity (semantic mode). Otherwise falls back to
+ * BM25-lite keyword scoring.
+ *
+ * Returns the concatenated content of the top-K chunks with source attribution.
+ */
+export function retrieveContext(
+  query: string,
+  index: RagChunk[],
+  topK: number = 3,
+  queryEmbedding?: number[],
+  excludeExercises: boolean = false
+): string {
+  if (index.length === 0) return '';
+
+  let pool = index;
+  if (excludeExercises) {
+    const filtered = index.filter(c => !/^Exercise\s+\d/i.test(c.title));
+    if (filtered.length > 0) {
+      pool = filtered;
+    }
+  }
+
+  let scored: { chunk: RagChunk; score: number }[];
+
+  // Semantic mode: cosine similarity
+  if (queryEmbedding && queryEmbedding.length > 0 && pool[0]?.embedding && pool[0].embedding.length > 0) {
+    scored = pool
+      .filter(c => c.embedding && c.embedding.length > 0)
+      .map(chunk => ({
+        chunk,
+        score: cosineSimilarity(queryEmbedding, chunk.embedding!),
+      }));
+  } else {
+    // BM25-lite keyword mode
+    const queryTokens = [...new Set(tokenize(query))];
+    if (queryTokens.length === 0) return '';
+
+    const N = pool.length;
+
+    // Pre-build token Sets for O(1) lookup (fix: was O(n) Array.includes())
+    const chunkTokenSets = pool.map(c => new Set(c.tokens));
+
+    // Pre-compute document frequency for each query token
+    const df = new Map<string, number>();
+    for (const token of queryTokens) {
+      let count = 0;
+      for (const tokenSet of chunkTokenSets) {
+        if (tokenSet.has(token)) count++;
+      }
+      df.set(token, count);
+    }
+
+    // Score each chunk
+    scored = pool.map((chunk, idx) => {
+      let score = 0;
+      const chunkTokenSet = chunkTokenSets[idx];
+      for (const token of queryTokens) {
+        if (chunkTokenSet.has(token)) {
+          const termDf = df.get(token) || 0;
+          score += Math.log(N / (1 + termDf));
+        }
+      }
+      return { chunk, score };
+    });
+  }
+
+  // Sort by score descending, take top-K
+  scored.sort((a, b) => b.score - a.score);
+  const topChunks = scored.slice(0, topK).filter(s => s.score > 0);
+
+  if (topChunks.length === 0) return '';
+
+  // Format the retrieved context with source attribution
+  return topChunks
+    .map(({ chunk }) => `### ${chunk.title}\n*(Source: ${chunk.source})*\n\n${chunk.content}`)
+    .join('\n\n---\n\n');
+}
+
+// Track the last indexed content hash to avoid unnecessary full re-index
+let _lastIndexedHash = '';
+
+// ======================== ChromaDB Backend (Option 2) ========================
+/**
+ * Send chunked knowledge files to the ChromaDB backend for indexing.
+ * Reuses the existing file chunking logic (md, py, ipynb, txt).
+ * Uses content hashing to skip re-index if knowledge base hasn't changed.
+ */
+export async function indexToChromaDB(repoPath: string, serverUrl: string): Promise<number> {
+  const knowledgeDir = path.join(repoPath, 'knowledge');
+  if (!fs.existsSync(knowledgeDir)) return 0;
+  const files = collectFiles(knowledgeDir, ['.md', '.py', '.txt', '.ipynb']);
+  const allChunks: RagChunk[] = [];
+  for (const filePath of files) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const relativePath = path.relative(knowledgeDir, filePath);
+    if (filePath.endsWith('.ipynb')) {
+      allChunks.push(...chunkNotebook(content, relativePath));
+    } else if (filePath.endsWith('.py')) {
+      allChunks.push(...chunkPython(content, relativePath));
+    } else {
+      allChunks.push(...chunkMarkdown(content, relativePath));
+    }
+  }
+  if (allChunks.length === 0) return 0;
+
+  // Content-hash based dedup: skip re-index if knowledge base unchanged
+  const contentHash = crypto.createHash('md5')
+    .update(allChunks.map(c => c.id).sort().join(','))
+    .digest('hex');
+  if (contentHash === _lastIndexedHash) {
+    return allChunks.length;  // Already indexed, skip
+  }
+
+  // Send chunks to the ChromaDB backend
+  const url = serverUrl.replace(/\/$/, '');
+  const payload = {
+    chunks: allChunks.map(c => ({
+      id: c.id,
+      source: c.source,
+      title: c.title,
+      content: c.content,
+    })),
+    reset: true,
+  };
+  const resp = await axios.post(`${url}/index`, payload, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 120000,
+  });
+  _lastIndexedHash = contentHash;
+  return resp.data.indexed || 0;
+}
+
+/**
+ * Query the ChromaDB backend for relevant course materials.
+ * Returns formatted context string matching the output format of retrieveContext().
+ */
+export async function queryChromaDB(
+  query: string,
+  serverUrl: string,
+  topK: number = 3,
+  excludeExercises: boolean = false
+): Promise<string> {
+  const url = serverUrl.replace(/\/$/, '');
+  const resp = await axios.post(`${url}/query`, {
+    query: query.substring(0, 2000),  // truncate long queries
+    top_k: topK,
+    filter_exercises: excludeExercises,
+  }, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 30000,
+  });
+  const results = resp.data.results || [];
+  if (results.length === 0) return '';
+  // Format in the same style as retrieveContext()
+  return results
+    .filter((r: any) => r.score > 0)
+    .map((r: any) => `### ${r.title}\n*(Source: ${r.source})*\n\n${r.content}`)
+    .join('\n\n---\n\n');
+}
