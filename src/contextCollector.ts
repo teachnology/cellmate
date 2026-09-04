@@ -1,20 +1,19 @@
 import * as vscode from 'vscode';
+import { StudentCommentInfo, extractStudentComment } from './commentUtils';
+export type { StudentCommentInfo } from './commentUtils';
+import { listLocalExercises } from './gitUtils';
+import { extractExerciseId } from './promptUtils';
 
-// Define the structure of the student comment information
-export interface StudentCommentInfo {
-    text: string;
-    lineIndex: number;
-    codeOnLine?: string;
-}
+// This file, the idea uses workspace to store comment state comes from LLM.
 
 // Collect exercise context from the notebook and the selected code cell
 export interface ExerciseContext {
+    exerciseId?: string;
+    exerciseDescription?: string;
+    exerciseConcept?: string[];
     studentCode: string;
     studentComment?: string;
-    isDefaultComment: boolean;
-    hasNewStudentComment: boolean;
-    shownError?: string;
-    codeCellIndex: number;
+    testFeedback?: string;
     studentCommentLine?: number;
     studentCommentCodeLine?: string;
 }
@@ -26,29 +25,30 @@ export interface CollectedExerciseContext {
     commentStateKey: string;
 }
 
-const DEFAULT_STUDENT_COMMENT = 'I do not know how to process';
-
-export function collectExerciseContext(
+// This function comes from LLM to store the comment state
+export async function collectExerciseContext(
     cell: vscode.NotebookCell,
     extensionContext: vscode.ExtensionContext
-): CollectedExerciseContext {
+): Promise<CollectedExerciseContext> {
     const studentCode = cell.document.getText();
+
+    const exerciseId = extractExerciseId(studentCode) ?? findExerciseIdForCell(cell) ?? "";
+    const exercises = await listLocalExercises();
+    const exercise = exercises.find(ex => {return String(ex.id).trim() === exerciseId;});
+    // Extract all valid comments currently in the student's code
     const currentComments = extractStudentComment(studentCode);
-    const commentStateKey = getCommentStateKey(cell);
+    // Load the previous comment snapshot for this cell
+    const commentStateKey = getCommentStateKey(cell, exerciseId);
     const previousComments = extensionContext.workspaceState.get<StudentCommentInfo[]>(commentStateKey, []);
     const selectedComment = findNewOrChangedComment(currentComments, previousComments);
-    const hasNewStudentComment = selectedComment !== undefined;
-    
-    const studentComment = selectedComment?.text ?? DEFAULT_STUDENT_COMMENT;
-    const isDefaultComment = studentComment === undefined;
 
     return {
         context: {
+            exerciseId: exerciseId || undefined,
+            exerciseDescription: exercise?.description ?? undefined,
+            exerciseConcept: normalizeExpectedConcepts(exercise?.expectedConcept ?? exercise?.concept),
             studentCode,
-            studentComment,
-            isDefaultComment,
-            hasNewStudentComment,
-            codeCellIndex: cell.index,
+            studentComment: selectedComment?.text,
             studentCommentLine: selectedComment?.lineIndex,
             studentCommentCodeLine: selectedComment?.codeOnLine,
         },
@@ -57,94 +57,70 @@ export function collectExerciseContext(
     };
 }
 
-function extractStudentComment(code: string): StudentCommentInfo[] {
-    const lines = code.split("\n");
-    const comments: StudentCommentInfo[] = [];
-
-    // The code cell is completely empty
-    if (lines.length === 0 || lines.every(line => line.trim().length === 0)) {
-        return comments;
+function normalizeExpectedConcepts(concepts: string[] | string | undefined): string[] {
+    if (!concepts) {
+        return [];
     }
 
-    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-        const originalLine = lines[lineIndex];
-        // Skip empty lines
-        if (originalLine.trim().length === 0) {
-            continue;
-        }
-
-        const commentStart = findPythonCommentStart(originalLine);
-        // The line does not contain a comment
-        if (commentStart === -1) {
-            continue;
-        }
-
-        const codeOnLine = originalLine.slice(0, commentStart).trim();
-        const commentText = originalLine.slice(commentStart + 1).trim();
-        // The comment is empty or is a tamplate comment
-        if (!isValidStudentComment(commentText)) {
-            continue;
-        }
-
-        // Add the valid comment to the list
-        comments.push({
-            text: commentText,
-            lineIndex: lineIndex,
-            codeOnLine: codeOnLine.length > 0 ? codeOnLine : undefined,
-        }); 
+    if (typeof concepts === 'string') {
+        return concepts.split(',').map(concept => concept.trim()).filter(concept => concept.length > 0);
     }
-    return comments;
-} 
-
-function findPythonCommentStart(line: string): number {
-    let inSingleQuote = false;
-    let inDoubleQuote = false;
-    let escaped = false;
-
-    for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (char === "\\") {
-            escaped = true;
-            continue;
-        }
-        if (char === "'" && !inDoubleQuote) {
-            inSingleQuote = !inSingleQuote;
-            continue;
-        }
-        if (char === '"' && !inSingleQuote) {
-            inDoubleQuote = !inDoubleQuote;
-            continue;
-        }
-        if (char === "#" && !inSingleQuote && !inDoubleQuote) {
-            return i; // Found a comment start
-        }
-    }
-    return -1; // No comment found
+    return concepts.map(concept => concept.trim()).filter(concept => concept.length > 0);
 }
 
-function isValidStudentComment(comment: string): boolean {
-    const normalizedComment = comment.trim().replace(/\s+/g, " ").toLowerCase();
-
-    if (normalizedComment.length === 0) {
-        return false; // Empty comment
+function extractExerciseIdFromText(text: string): string | undefined {
+    // <!-- Exercise_ID: 1.2 -->
+    const markerMatch = text.match(
+        /<!--\s*Exercise_ID:\s*([0-9]+(?:\.[0-9]+)*)\s*-->/i
+    );
+    if (markerMatch) {
+        return markerMatch[1].trim();
     }
 
-    const templateComments = [
-        "exercise: ",
-        "write your answer to the exercise below"
-    ];
-
-    const isTemplateComment = templateComments.some(template => normalizedComment.startsWith(template));
-
-    if (isTemplateComment) {
-        return false; // It's a template comment
+    // ### Exercise 1.2: Title, ## Exercise: 1.2
+    const headingMatch = text.match(
+        /^#{1,6}\s*Exercise\s*:?\s*([0-9]+(?:\.[0-9]+)*)\s*:?.*$/im
+    );
+    if (headingMatch) {
+        return headingMatch[1].trim();
     }
 
-    return true; // Valid student comment
+    // # Exercise: 1.2
+    const codeCommentMatch = text.match(
+        /^#\s*Exercise\s*:?\s*([0-9]+(?:\.[0-9]+)*)\s*:?.*$/im
+    );
+    if (codeCommentMatch) {
+        return codeCommentMatch[1].trim();
+    }
+
+    return undefined;
+}
+
+
+function findExerciseIdForCell(cell: vscode.NotebookCell): string | undefined {
+    const notebook = cell.notebook;
+
+    // First try current code cell
+    const currentText = cell.document.getText();
+    const currentCellId = extractExerciseIdFromText(currentText);
+    if (currentCellId) {
+        return currentCellId;
+    }
+
+    // Then search upward for the nearest markdown exercise cell
+    for (let i = cell.index - 1; i >= 0; i--) {
+        const previousCell = notebook.cellAt(i);
+        if (previousCell.kind !== vscode.NotebookCellKind.Markup) {
+            continue;
+        }
+        const markdownText = previousCell.document.getText();
+        const exerciseId = extractExerciseIdFromText(markdownText);
+        if (exerciseId) {
+            return exerciseId;
+        }
+    }
+
+    return undefined;
 }
 
 function normalizeCommentPart(value: string | undefined): string {
@@ -182,12 +158,14 @@ function findNewOrChangedComment(
     return newOrChangedComments[newOrChangedComments.length - 1]; // Return the last new or changed comment
 }
 
-function getCommentStateKey(cell: vscode.NotebookCell): string {
+// This function generated by LLM to store the CommentStateKey
+function getCommentStateKey(cell: vscode.NotebookCell, exerciseId: string): string {
     const notebookUri = cell.notebook.uri.toString();
 
     return [
         "student-comment-snapshot",
         notebookUri,
+        exerciseId,
         cell.index.toString()
     ].join(":");
 }

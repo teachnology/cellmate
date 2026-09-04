@@ -1,11 +1,10 @@
-import type {
-    HintGenerationContext,
-    KeywordCategory,
-    KeywordClassification
-} from "./hintGenertor";
+import { ExerciseContext } from "./contextCollector";
+import { KeywordCategory, KeywordClassification } from "./hintClassifier";
+
+// This file uses LLM to refine prompt.
 
 type HintPromptBuilder = (
-    Context: HintGenerationContext,
+    Context: ExerciseContext,
     classification: KeywordClassification
 ) => string;
 
@@ -25,17 +24,14 @@ function formatConceptList(concepts?: string[]): string {
 }
 
 function getTargetConcept (
-    context: HintGenerationContext,
+    context: ExerciseContext,
     classification: KeywordClassification
 ): string {
-    if (classification.targetConcept &&
-        classification.targetConcept.trim().length > 0
-    ) {
+    if (classification.targetConcept && classification.targetConcept.trim().length > 0) {
         return formatConcept(classification.targetConcept);
     }
-
-    if (classification.exerciseConcepts?.length === 1) {
-        return formatConcept(classification.exerciseConcepts[0]);
+    if (context.exerciseConcept?.length === 1) {
+        return formatConcept(context.exerciseConcept[0]);
     }
     return "the programming concept mentioned by the student";
 }
@@ -48,7 +44,7 @@ const specialPromptBuilders: Partial<Record<KeywordCategory, HintPromptBuilder>>
 };
 
 function buildRelevantContext(
-    context: HintGenerationContext,
+    context: ExerciseContext,
     classification: KeywordClassification
 ): string[] {
     const sections: string[] = [];
@@ -68,8 +64,8 @@ function buildRelevantContext(
 
         case "Concepts":
             sections.push(`Target Concept:\n${getTargetConcept(context, classification)}`);
-            if (classification.exerciseConcepts?.length) {
-                sections.push(`Expected Exercise Concepts:\n${formatConceptList(classification.exerciseConcepts)}`);
+            if (context.exerciseConcept?.length) {
+                sections.push(`Expected Exercise Concepts:\n${formatConceptList(context.exerciseConcept)}`);
             }
             if (context.studentComment) {
                 sections.push(`Student Comment:\n${context.studentComment}`);
@@ -86,8 +82,8 @@ function buildRelevantContext(
             if (context.exerciseDescription) {
                 sections.push(`Exercise Description:\n${context.exerciseDescription}`);
             }
-            if (classification.exerciseConcepts?.length) {
-                sections.push(`Expected Concept:\n${formatConceptList(classification.exerciseConcepts)}`);
+            if (context.exerciseConcept?.length) {
+                sections.push(`Expected Concept:\n${formatConceptList(context.exerciseConcept)}`);
             }
             if (context.studentCode) {
                 sections.push(`Student Code:\n${context.studentCode}`);
@@ -98,8 +94,8 @@ function buildRelevantContext(
             break;
 
         case "Error correction":
-            if (context.shownError) {
-                sections.push(`Show Error:\n${context.shownError}`);
+            if (context.testFeedback) {
+                sections.push(`Show Error:\n${context.testFeedback}`);
             }
             if (context.studentCode) {
                 sections.push(`Student Code:\n${context.studentCode}`);
@@ -119,8 +115,8 @@ function buildRelevantContext(
             if (context.studentComment) {
                 sections.push(`Student Comment:\n${context.studentComment}`);
             }
-            if (context.shownError) {
-                sections.push(`Show Error:\n${context.shownError}`);
+            if (context.testFeedback) {
+                sections.push(`Show Error:\n${context.testFeedback}`);
             }
             break;
     }
@@ -128,25 +124,20 @@ function buildRelevantContext(
 }
 
 export function buildHintPrompt(
-    exContext: HintGenerationContext,
+    exContext: ExerciseContext,
     classification: KeywordClassification
 ): string {
     const category = classification.category;
-
     const builder = specialPromptBuilders[category] ?? buildDefaultHintPrompt;
-
     const selectedPromptName = specialPromptBuilders[category]
         ? `${category} Prompt` : "Default Hint Prompt";
-    
     console.warn("[Hint Prompt] selected prompt:", selectedPromptName);
-
     const finalPrompt = builder(exContext, classification);
-
     return finalPrompt;
 }
 
 function buildDefaultHintPrompt (
-    context: HintGenerationContext,
+    context: ExerciseContext,
     classification: KeywordClassification
 ): string {
     const sections: string[] = [];
@@ -162,7 +153,7 @@ ${classification.category}
 Rules:
 - Respond directly to the student's current difficulty.
 - Anchor the hint to the student's actual code, comment, error, or exercise context.
-- Identify the exact varaible, expression, condition, code structure, or task requirement the student
+- Identify the exact variable, expression, condition, code structure, or task requirement the student
 should focus on when that information is available.
 - Avoid generic advice that could apply to many unrelated exercises.
 - Give one concrete next action the student can take.
@@ -200,11 +191,9 @@ function matchesExpectedConcept(
 
     return expectedConcepts.some(expectedConcept => {
         const normalizedExpected = normalizeConcept(expectedConcept);
-
         if (normalizedExpected.length === 0) {
             return false;
         }
-
         return (
             normalizedTarget === normalizedExpected ||
             normalizedTarget.includes(normalizedExpected) ||
@@ -213,14 +202,60 @@ function matchesExpectedConcept(
     });
 }
 
+function needsDetailedExplanation(context: ExerciseContext): boolean {
+    if (!context.studentComment || !context.studentCommentCodeLine) {
+        return false;
+    }
+
+    const comment = context.studentComment.toLowerCase();
+    const localReferencePatterns: RegExp[] = [
+        /\bthis line\b/i,
+        /\bthis part\b/i,
+        /\bthis code\b/i
+    ];
+    return localReferencePatterns.some(pattern => pattern.test(comment));
+}
+
 function buildConceptPrompt(
-    context: HintGenerationContext,
+    context: ExerciseContext,
     classification: KeywordClassification
 ): string {
     const concept = getTargetConcept(context, classification);
-
-    const conceptMatchesExercise = matchesExpectedConcept(concept, classification.exerciseConcepts ?? []);
+    const useDetailedExplanation = needsDetailedExplanation(context);
     
+    if (useDetailedExplanation) {
+        return `
+    You are a programming tutor.
+    
+    The student is asking about an explanation of a specific local piece of code.
+    
+    Exercise description:
+    ${context.exerciseDescription ?? "N/A"}
+    
+    Student commnet:
+    ${context.studentComment ?? "N/A"}
+    
+    Student code:
+    ${context.studentCode}
+    
+    Code associated with the student comment:
+    ${context.studentCommentCodeLine ?? "N/A"}
+    
+    Rules:
+    - Directly explain the student's specific misunderstanding or confusion.
+    - Explain the referenced code line or expression is doing.
+    - Explain how the relevant parts work together in this specific line.
+    - Refer to the exercise description only when it is necessary to clarify the meaning of the referenced code.
+    - Use simple language suitable for an introductory Python student.
+    - Focus only on the code or behaviour the student asked about.
+    - Do not discuss whether the concept is required by the exercise.
+    - Keep the explanation focused and concise.
+    - Do not explain later steps, later calculations, or what the result will be used for next.
+    - Return only Markdown and use limited emphasis for key code elements or concepts.`.trim();
+    }
+
+    const conceptMatchesExercise = matchesExpectedConcept(concept, context.exerciseConcept ?? []);
+
     const relevanceStatement = conceptMatchesExercise 
         ? "The requested concept is relevant to the current exercise."
         : "The requested concept is not required by the current exercise.";
@@ -240,10 +275,9 @@ function buildConceptPrompt(
         
         The sentence must:
         - refer explicitly to the student's current misunderstanding, code element, or question when available.
-        - identify where the concept is relevant in the student's current attempt;
-        - be specific about what the student should inspect or understand next;
-        - not provide the task-specific implementation, completed expression, or final anwer;`
-
+        - Clarify why the concept is not necessary here;
+        - not provide the task-specific implementation, completed expression, or final answer;`
+    
     return `
 You are a programming tutor.
     
@@ -253,7 +287,7 @@ Target concept:
 ${concept}
 
 Expected exercise concept:
-${formatConceptList(classification.exerciseConcepts)}
+${formatConceptList(context.exerciseConcept)}
 
 Exercise description:
 ${context.exerciseDescription ?? "N/A"}
@@ -261,20 +295,16 @@ ${context.exerciseDescription ?? "N/A"}
 Student comment:
 ${context.studentComment ?? "N/A"}
 
+Code associated with the student comment:
+${context.studentCommentCodeLine ?? "N/A"}
+
 Concept relevance judgement:
 ${relevanceStatement}
 
-Your task is to:
-- briefly explain the target concept.
-- show its basic syntax when syntax is useful.
-- connect it to the student's specific difficulty in the current exercise.
-
 Rules:
-- Explain only the programming concept the student asked about.
-- Use simple language suitable for an introductory Python student.
-- Keep the explanation short and focused.
+- Briefly only explain the target programming concept relevant to the student's question.
 - Respond directly to the misunderstanding shown in the student comment.
-- Use the student's wording or relevant code element when it helps clarify what they misunderstood.
+- Use simple language suitable for an introductor Python student.
 - Do not give a generic explanation when a specific misunderstanding is visible.
 - Be specific about what the student should understand or inspect, but leave the implementation to the student.
 - Do not reveal the current exercise's answer.
@@ -307,12 +337,15 @@ One short sentence connecting the concept to the student's current difficulty.
 `.trim();
 }
 
-function buildTaskRequirementPrompt(context: HintGenerationContext, _classification: KeywordClassification): string {
+function buildTaskRequirementPrompt(context: ExerciseContext, classification: KeywordClassification): string {
     return `
 You are a programming tutor helping a beginner understand an exercise.
 
 Exercise description:
 ${context.exerciseDescription ?? "N/A"}
+
+Student code:
+${context.studentCode ?? "N/A"}
 
 Student question:
 ${context.studentComment ?? "N/A"}
@@ -323,11 +356,12 @@ Answer only the student's question about the exercise requirements.
 Rules:
 - Clarify what the exercise expects the student to produce.
 - Focus only on the relevant input, output, required behaviour, or constraints.
-- Hightlight some relevant input, output, required behaviour, or constriants.
+- Highlight some relevant input, output, required behaviour, or constraints.
 - Avoid generic description of the task.
 - Answer the exact requirement the student is confused about rather than restarting the whole exercise.
 - Use the concrete input, output, behaviour, or constraint named in the exercise when
 it is relevant to the student's question.
+- Do not use question, especially in the last line.
 - Do not analyse the student's code.
 - Do not discuss errors, debugging, PyBryt, tests, or annotations.
 - Do not explain the implementation steps.
@@ -339,15 +373,18 @@ it is relevant to the student's question.
 - Write as markdown format with some highlights.`.trim();
 }
 
-function buildErrorCorrectionPrompt(context: HintGenerationContext, _classification: KeywordClassification): string{
+function buildErrorCorrectionPrompt(context: ExerciseContext, classification: KeywordClassification): string{
     return `
 You are a programming tutor helping a beginner correct an error.
+
+Exercise description
+${context.exerciseDescription ?? "N/A"}
 
 Student code:
 ${context.studentCode ?? "N/A"}
 
-Shown error:
-${context.shownError ?? "N/A"}
+Internal test failure information:
+${context.testFeedback ?? "N/A"}
 
 Student comment:
 ${context.studentComment ?? "N/A"}
@@ -366,27 +403,34 @@ If there are multiple independent issues:
 - Do not describe the remaining issues.
 
 Rules:
-- Base the response only on the provided code, error, and student question.
-- Hightlight the some key points in the error.
+- Base the response only on the provided code, error information, and student question.
+- Highlight the key points in the error.
 - Do not invent an error when no concrete error is visible.
-- Prioritize syntax or runtime errors that prevent the code from running.
-- Otherwise, prioritize the issue most directly responsible for the incorrect result.
-- Point to the relevant line, expression, condition, operation, or code structure.
-- Name the exact code element causing the problem when it can be identified from the provided code.
-- Explain why that specific element is problematic, but do not provide the exact replacement code.
-- Give only one focused action for the student to take next.
-- Do not add a topic.
+- First determine whether a syntax or runtime error is present.
+- If there is only one syntax or runtime error, explain only that error.
+- If a syntax or runtime error and another independent error are both clearly present, present them as two short bullet points:
+  Syntax/runtime error:explain the blocking syntax or runtime issue.
+  Other error: explain the most important remaining logical or result-related issue.
+- If there is no syntax or runtime error, focus only on the issue most directly responsible for the incorrect result.
+- Do not list more than one non-syntax/runtime issue.
+- Point to the relevant line, expression, condition, operation, variable, or code structure.
+- Name the exact code element causing the problem when it can be identified from the provided context.
+- Explain why the identified element is problematic, but do not provide the exact replacement code.
+- Give one focused action for each reported issue.
+- Do not use a question, especially in the last line.
+- Do not add a separate topic or heading unless bullet points are required by the rules above.
 - Do not provide a complete corrected solution.
 - Do not give all remaining correction steps.
 - Do not directly provide the final algorithm.
 - For a logical error, do not provide the exact replacement expression when the student can reasonably determine it from the hint.
 - Use simple language suitable for a beginner.
-- Write no more than 3 short sentences.
-- Keep the response short and focused.
-- Write as markdown format with some highlights.`.trim();
+- Keep each explanation short and focused.
+- Write no more than 3 short sentences when reporting one issue.
+- When reporting two issues, use exactly two short bullet points.
+- Return Markdown with light highlighting where useful.`.trim();
 }
 
-function buildTaskProcessingPrompt(context: HintGenerationContext, classification: KeywordClassification): string {
+function buildTaskProcessingPrompt(context: ExerciseContext, classification: KeywordClassification): string {
     return `
 You are a helpful programming tutor helping a beginner with a Python exercise.
 
@@ -394,7 +438,7 @@ Student code:
 ${context.studentCode ?? "N/A"}
 
 Expected exercise concept:
-${formatConceptList(classification.exerciseConcepts)}
+${formatConceptList(context.exerciseConcept)}
 
 Exercise description:
 ${context.exerciseDescription ?? "N/A"}
@@ -410,15 +454,14 @@ Rules:
 - Tell the student exactly where to focus next, but not exactly what code to write.
 - Prefer a concrete action such as inspecting, comparing, tracing, or testing one specific part of the current attempt.
 - Avoid generic advice such as "think about the problem", "check your code", or "consider the next step" without identifying what to inspect.
+- Do not use transition phrases such as "Now, think about...".
 - Give only one small action, not the full solution.
 - Do not list all remaining steps.
-- Do not give a complete function, loop, formula, condiiton, or algorithm.
+- Do not give a complete function, loop, formula, condition, or algorithm.
 - Do not directly state the final answer.
-- Do not list multiple steps.
-- Do not describe the entire solution from beginning to end.
 - Use the student's exisiting code when deciding the next step.
 - Keep the response to no more than two short sentences.
-- The second sentence may be a guiding question.
+- Do not end with a guiding question.
 - Return in markdown format with some highlights.
 `.trim();
 }
