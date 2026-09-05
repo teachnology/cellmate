@@ -32,6 +32,8 @@ import {
   fillPromptTemplate
 } from './promptUtils';
 import { initFeedbackHistory, getHistory, addRecord, formatHistoryForPrompt, formatScaffoldingInstructions, extractLevel, FeedbackRecord } from './feedbackHistory';
+import { collectExerciseContext } from './contextCollector';
+import { selectAdaptiveHintPrompt } from './hintUtils';
 
 const chan = vscode.window.createOutputChannel("Jupyter AI Feedback");
 function toStr(x: any) { try { return typeof x === 'string' ? x : JSON.stringify(x, (_k, v) => v, 2); } catch { return String(x); } }
@@ -1615,19 +1617,23 @@ ${feedback}
         }
 
         // 2. Get prompt content
-        const promptIdFromCell = extractPromptId(code);
-        const promptId = promptIdFromCell || cfg.get<string>('templateId', '');
+        // const collected = await collectExerciseContext(cell, ctx);
+        // const adaptiveResult = await selectAdaptiveHintPrompt(collected.context, 
+        //   async (prompt: string) => {return await callLLMAPI(prompt, {apiUrl, apiKey, modelName});}
+        // );
+        // const promptIdFromCell = extractPromptId(code);
+        // const promptId = promptIdFromCell || adaptiveResult.promptId || cfg.get<string>('templateId', '');
 
-        // check if prompt id exists in local prompt list
-        const templates = await listLocalTemplates();
-        const promptExists = templates.some(t => t.id === promptId);
+        // // check if prompt id exists in local prompt list
+        // const templates = await listLocalTemplates();
+        // const promptExists = templates.some(t => t.id === promptId);
 
-        if (!promptExists) {
-          vscode.window.showErrorMessage(`Prompt ID "${promptId}" not found in the prompt repository`);
-          return;
-        }
+        // if (!promptExists) {
+        //   vscode.window.showErrorMessage(`Prompt ID "${promptId}" not found in the prompt repository`);
+        //   return;
+        // }
 
-        const promptContent = await getPromptContent(promptId);
+        // const promptContent = await getPromptContent(promptId);
 
         // 3. Initialize analysis variable
         let analysis = '';
@@ -1739,6 +1745,27 @@ ${feedback}
             }
           }
         }
+        const collected = await collectExerciseContext(cell, ctx);
+        collected.context.testFeedback = analysis || undefined;
+        const adaptiveResult = await selectAdaptiveHintPrompt(collected.context, 
+          async (prompt: string) => {return await callLLMAPI(prompt, {apiUrl, apiKey, modelName});}
+        );
+        console.log('Adaptive category:', adaptiveResult.classification.category);
+        console.log('Adaptive prompt:', adaptiveResult.promptId);
+        console.log('Test feedback:', collected.context.testFeedback);
+        const promptIdFromCell = extractPromptId(code);
+        const promptId = promptIdFromCell || adaptiveResult.promptId || cfg.get<string>('templateId', '');
+
+        // check if prompt id exists in local prompt list
+        const templates = await listLocalTemplates();
+        const promptExists = templates.some(t => t.id === promptId);
+
+        if (!promptExists) {
+          vscode.window.showErrorMessage(`Prompt ID "${promptId}" not found in the prompt repository`);
+          return;
+        }
+
+        const promptContent = await getPromptContent(promptId);
 
         // 5. Assemble prompt
         // log("promptContent:", promptContent)
@@ -1748,6 +1775,10 @@ ${feedback}
         // 6. Extract and fill placeholders
         const placeholderKeys = getTemplatePlaceholderKeys(promptContent);
         const placeholderMap = extractPromptPlaceholders(editor.notebook, cell.index, placeholderKeys);
+
+        for (const [key, value] of Object.entries(adaptiveResult.values)) {
+          placeholderMap.set(key, value);
+        }
 
         // Add special placeholders for backward compatibility
         placeholderMap.set('cell', code);

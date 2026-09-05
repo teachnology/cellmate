@@ -1,4 +1,3 @@
-import * as vscode from 'vscode';
 import { ExerciseContext } from "./contextCollector";
 import { getPromptContent } from './gitUtils';
 
@@ -409,17 +408,15 @@ async function getLLMClassification(
     }
 }
 
-export async function generateHint(
-    exerciseContext: ExerciseContext,
-    callLLM: (prompt: string) => Promise<string>,
-    _extensionContext: vscode.ExtensionContext
-): Promise<string> {
-    const finalClassification = await classifyHintType(exerciseContext, callLLM);
-    const promptId = getHintPromptId(exerciseContext, finalClassification);
-    const promptTemplate = await getPromptContent(promptId);
-    const values = buildHintPromptValues(exerciseContext, finalClassification);
-    const prompt = fillPromptValues(promptTemplate, values);
-    return await callLLM(prompt);
+export async function selectAdaptiveHintPrompt(exerciseContext: ExerciseContext, callLLM: (prompt: string) => Promise<string>): Promise<{
+    classification: KeywordClassification;
+    promptId: string;
+    values: Record<string, string>;
+}> {
+    const classification = await classifyHintType(exerciseContext, callLLM);
+    const promptId =getHintPromptId(exerciseContext, classification);
+    const values = buildHintPromptValues(exerciseContext, classification);
+    return {classification, promptId, values,};
 }
 
 function fillPromptValues(template: string, values: Record<string, string>): string {
