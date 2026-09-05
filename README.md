@@ -6,6 +6,8 @@ Cellmate is an AI-powered teaching feedback extension designed specifically for 
 ### 1. AI Feedback Generation
 - **Personalized Feedback**: Generates targeted feedback based on student code and test results
 - **Template-based Prompts**: Uses a flexible prompt template system with support for various placeholders
+- **Adaptive Hint Selection**: Automatically classifies the student's current help need into Task Requirements, Concepts, Error Correction, or Task Processing Steps, and selects the corresponding feedback prompt.
+- **Student Comment Awareness**: Detects newly added or modified student comments and uses them together with code context and hidden-test feedback to generate more targeted hints.
 
 ### 2. Intelligent RAG Engine
 - **Local Vector Database**: Built-in ChromaDB for fast retrieval of course materials and historical context.
@@ -52,7 +54,8 @@ npm run compile
 1. **Open Jupyter Notebook**: Open a `.ipynb` file in VS Code
 2. **Write Code**: Write Python code in code cells
 3. **Click button**: Click the AI feedback button
-4. **View Feedback**: The extension will automatically generate feedback and insert it into the notebook
+4. **Adaptive Analysis**: CellMate collects the exercise context, student code, newly added or modified student comments, and optional hidden-test feedback. It then automatically determines the type of help required.
+5. **View Feedback**: The corresponding prompt template is selected and the generated feedback is inserted into the notebook.
 
 ### Error Helper and Error Chat
 
@@ -218,23 +221,26 @@ To independently reproduce all empirical results, benchmarks, and ablation studi
 ## Project Structure
 ```
 cellmate/
-├── src/                  # VS Code Extension source code
-│   ├── extension.ts      # Main extension entry and UI orchestration
-│   ├── apiCaller.ts      # API calling and LLM networking
-│   ├── localServer.ts    # Manages local RAG Python server lifecycle
-│   ├── ragUtils.ts       # RAG integration utilities
-│   ├── promptUtils.ts    # Prompt template processing
-│   └── ...               # Git, Speech, and other utilities
-├── rag-server/           # Python RAG Backend Server
-│   ├── app.py            # Streamlit UI for knowledge management
-│   ├── server.py         # FastAPI backend endpoints
-│   ├── chroma_data/      # Local ChromaDB vector storage
-│   ├── evaluate_*.py     # Ragas evaluation and ablation scripts
-│   ├── result/           # Benchmark JSON results
-│   └── requirements.txt  # Python dependencies
-├── docs/                 # Documentation directory
-├── README.md             # Main project documentation
-└── package.json          # Project configuration
+├── src/                    # VS Code Extension source code
+│   ├── extension.ts        # Main extension entry and UI orchestration
+│   ├── contextCollector.ts # Collects exercise and student context
+│   ├── commentUtils.ts     # Extracts student comments from code cells
+│   ├── hintUtils.ts        # Classifies student needs and selects hint prompts
+│   ├── apiCaller.ts        # API calling and LLM networking
+│   ├── localServer.ts      # Manages local RAG Python server lifecycle
+│   ├── ragUtils.ts         # RAG integration utilities
+│   ├── promptUtils.ts      # Prompt template processing
+│   └── ...                 # Git, Speech, and other utilities
+├── rag-server/             # Python RAG Backend Server
+│   ├── app.py              # Streamlit UI for knowledge management
+│   ├── server.py           # FastAPI backend endpoints
+│   ├── chroma_data/        # Local ChromaDB vector storage
+│   ├── evaluate_*.py       # Ragas evaluation and ablation scripts
+│   ├── result/             # Benchmark JSON results
+│   └── requirements.txt    # Python dependencies
+├── docs/                   # Documentation directory
+├── README.md               # Main project documentation
+└── package.json            # Project configuration
 ```
 
 ## Contributing
