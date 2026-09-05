@@ -1638,6 +1638,7 @@ ${feedback}
         // 3. Initialize analysis variable
         let analysis = '';
         let visualTestSummary = '';
+        let allTestsPassed = false;
 
         // 4. If useHiddenTests is enabled, get test content and run tests
         if (useHiddenTests) {
@@ -1721,6 +1722,7 @@ ${feedback}
               // if no tests are run, it means there is a code execution or syntax error
               analysis += `Hidden tests could not be run due to a code execution or syntax error.\n`;
             } else {
+              allTestsPassed = true;
               analysis += `## Test Results\n`;
               analysis += `- All ${total} tests passed!\n\n`;
             }
@@ -1747,12 +1749,26 @@ ${feedback}
         }
         const collected = await collectExerciseContext(cell, ctx);
         collected.context.testFeedback = analysis || undefined;
+        const hasStudentQuestion = !!collected.context.studentComment?.trim();
+        if (allTestsPassed && !hasStudentQuestion) {
+          const notebook = editor.notebook;
+          const cellIndex = cell.index;
+          const targetCellIndex = cellIndex + 1;
+          const finalContent = `# **AI Feedback**\n\n${visualTestSummary}`;
+
+          if (targetCellIndex < notebook.cellCount &&
+            notebook.cellAt(targetCellIndex).kind === vscode.NotebookCellKind.Markup &&
+            notebook.cellAt(targetCellIndex).document.getText().startsWith('# **AI Feedback**'))  {
+              await replaceMarkdownCellContent(notebook, targetCellIndex, finalContent);
+          } else {
+            await insertMarkdownCellBelow(notebook, cellIndex, finalContent);
+          }
+          await ctx.workspaceState.update(collected.commentStateKey, collected.currentCommentSnapshot);
+          return;
+        }
         const adaptiveResult = await selectAdaptiveHintPrompt(collected.context, 
           async (prompt: string) => {return await callLLMAPI(prompt, {apiUrl, apiKey, modelName});}
         );
-        console.log('Adaptive category:', adaptiveResult.classification.category);
-        console.log('Adaptive prompt:', adaptiveResult.promptId);
-        console.log('Test feedback:', collected.context.testFeedback);
         const promptIdFromCell = extractPromptId(code);
         const promptId = promptIdFromCell || adaptiveResult.promptId || cfg.get<string>('templateId', '');
 
@@ -1967,6 +1983,9 @@ ${feedback}
           const finalContent = `# **AI Feedback**\n\n${testHeader}${fullFeedback.replace(/\n/g, '  \n')}`;
           await replaceMarkdownCellContent(notebook, targetCellIndex, finalContent);
           log('Streaming feedback complete');
+
+          // Save the current student comment snapshot
+          await ctx.workspaceState.update(collected.commentStateKey, collected.currentCommentSnapshot);
 
           // Save feedback record for iterative learning tracking
           if (exIdForHistory) {

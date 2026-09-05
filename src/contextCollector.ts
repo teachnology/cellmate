@@ -39,8 +39,10 @@ export async function collectExerciseContext(
     const currentComments = extractStudentComment(studentCode);
     // Load the previous comment snapshot for this cell
     const commentStateKey = getCommentStateKey(cell, exerciseId);
-    const previousComments = extensionContext.workspaceState.get<StudentCommentInfo[]>(commentStateKey, []);
-    const selectedComment = findNewOrChangedComment(currentComments, previousComments);
+    const previousComments = extensionContext.workspaceState.get<StudentCommentInfo[]>(commentStateKey);
+    const starterComments = exercise?.starterCode ? extractStudentComment(exercise.starterCode) : [];
+    const baselineComments = previousComments ?? starterComments;
+    const selectedComment = findNewOrChangedComment(currentComments, baselineComments);
 
     return {
         context: {

@@ -84,11 +84,18 @@ function isValidStudentComment(comment: string): boolean {
 
     const templateComments = [
         "exercise: ",
+        "exercise_id: ",
+        "prompt_id: ",
         "write your answer to the exercise below"
     ];
     const isTemplateComment = templateComments.some(template => normalizedComment.startsWith(template));
     if (isTemplateComment) {
         return false; // It's a template comment
+    }
+    
+    // Ignore commented-out assignment placeholders
+    if (/^[A-Za-z_][A-Za-z0-9_]*\s*=\s*$/.test(comment.trim())) {
+        return false;
     }
     return true; // Valid student comment
 }
